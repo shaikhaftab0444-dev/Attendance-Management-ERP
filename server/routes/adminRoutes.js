@@ -95,6 +95,7 @@ router.get('/period-slots/inconsistencies', roleGuard('admin', 'hod'), adminCont
 router.post('/period-slots/resolve-inconsistency', roleGuard('admin', 'hod'), adminController.resolvePeriodTimingInconsistency);
 router.get('/period-templates', roleGuard('admin', 'hod'), adminController.getPeriodTemplates);
 router.put('/period-templates', roleGuard('admin', 'hod'), adminController.updatePeriodTemplate);
+router.delete('/period-templates/:sectionId/:periodNumber', roleGuard('admin', 'hod'), adminController.deletePeriodTemplate);
 router.post('/period-slots', roleGuard('admin', 'hod'), adminController.createPeriodSlot);
 router.patch('/period-slots/:id', roleGuard('admin', 'hod'), adminController.updatePeriodSlot);
 router.get('/period-slots', roleGuard('admin', 'hod'), adminController.getPeriodSlots);

@@ -86,6 +86,11 @@ export const HodTimetable: React.FC = () => {
   const [timingModalEndTime, setTimingModalEndTime] = useState<string>('10:00');
   const [isUpdatingTiming, setIsUpdatingTiming] = useState(false);
 
+  // Delete Period Row Confirmation Modal State
+  const [isDeletePeriodModalOpen, setIsDeletePeriodModalOpen] = useState(false);
+  const [deletingPeriodNumber, setDeletingPeriodNumber] = useState<number | null>(null);
+  const [isDeletingPeriod, setIsDeletingPeriod] = useState(false);
+
   // Inconsistency Repair Modal State (Part B)
   const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
   const [activeInconsistency, setActiveInconsistency] = useState<any>(null);
@@ -265,6 +270,46 @@ export const HodTimetable: React.FC = () => {
     }
 
     setIsModalOpen(true);
+  };
+
+  // Dynamic Period Numbers derived from Section Templates & Slots
+  const activePeriodNumbers = useMemo(() => {
+    if (periodTemplates.length > 0) {
+      const fromTpl = periodTemplates.map((t) => Number(t.periodNumber));
+      const fromSlots = slots.map((s) => Number(s.periodNumber));
+      const set = new Set([...fromTpl, ...fromSlots]);
+      return Array.from(set).sort((a, b) => a - b);
+    }
+    if (slots.length > 0) {
+      const fromSlots = slots.map((s) => Number(s.periodNumber));
+      return Array.from(new Set(fromSlots)).sort((a, b) => a - b);
+    }
+    return [1, 2, 3, 4, 5, 6, 7, 8];
+  }, [periodTemplates, slots]);
+
+  // Open delete period row modal
+  const handleOpenDeletePeriodModal = (pNum: number) => {
+    setDeletingPeriodNumber(pNum);
+    setIsDeletePeriodModalOpen(true);
+  };
+
+  // Permanently delete entire period row
+  const handleDeletePeriodRow = async () => {
+    if (!selectedSection || !deletingPeriodNumber) return;
+
+    setIsDeletingPeriod(true);
+    try {
+      const res = await api.delete(`/admin/period-templates/${selectedSection}/${deletingPeriodNumber}`);
+      showToast(res.data?.message || `Period #${deletingPeriodNumber} and all scheduled slots were deleted.`, 'success');
+      setIsDeletePeriodModalOpen(false);
+      setIsTimingModalOpen(false);
+      setDeletingPeriodNumber(null);
+      await fetchSectionTimetable();
+    } catch (err: any) {
+      showToast(err.response?.data?.message || err.customMessage || 'Failed to delete period row', 'error');
+    } finally {
+      setIsDeletingPeriod(false);
+    }
   };
 
   const handleOpenTimingModal = (periodNumber: number) => {
@@ -496,12 +541,27 @@ export const HodTimetable: React.FC = () => {
               )}
             </div>
             <p className="text-xs text-slate-500">
-              Click any slot to edit/delete, click &apos;+&apos; in an empty cell to schedule, or click the pencil icon next to Period # to change timing for all days.
+              Click any slot to edit/delete, click &apos;+&apos; in an empty cell to schedule, or click the pencil/trash icons next to Period # to edit timings or delete entire period rows.
             </p>
           </div>
-          <span className="text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
-            Periods Scheduled: <strong className="text-slate-900 font-bold tabular-nums">{slots.length}</strong>
-          </span>
+          <div className="flex items-center gap-2">
+            {selectedSection && (
+              <button
+                type="button"
+                onClick={() => {
+                  const nextP = activePeriodNumbers.length > 0 ? Math.max(...activePeriodNumbers) + 1 : 1;
+                  handleOpenTimingModal(nextP);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-xl transition-all shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Period #{activePeriodNumbers.length > 0 ? Math.max(...activePeriodNumbers) + 1 : 1} Row</span>
+              </button>
+            )}
+            <span className="text-xs text-slate-500 bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+              Periods Scheduled: <strong className="text-slate-900 font-bold tabular-nums">{slots.length}</strong>
+            </span>
+          </div>
         </div>
 
         {selectedSection ? (
@@ -509,7 +569,7 @@ export const HodTimetable: React.FC = () => {
             <table className="w-full min-w-[800px] text-left border-collapse text-xs md:text-sm">
               <thead className="bg-slate-50 text-slate-700 text-[11px] md:text-xs uppercase tracking-wider border-b border-slate-200">
                 <tr>
-                  <th className="p-3 w-32 text-center font-bold text-slate-500 border-r border-slate-200 whitespace-nowrap">
+                  <th className="p-3 w-36 text-center font-bold text-slate-500 border-r border-slate-200 whitespace-nowrap">
                     Period #
                   </th>
                   {DAYS.map((day) => (
@@ -520,35 +580,50 @@ export const HodTimetable: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {PERIOD_NUMBERS.map((pNum) => {
-                  const tpl = templateMap.get(pNum);
-                  const displayStart = tpl?.startTime || DEFAULT_TIMINGS[pNum]?.start || '09:00';
-                  const displayEnd = tpl?.endTime || DEFAULT_TIMINGS[pNum]?.end || '10:00';
+                {activePeriodNumbers.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-8 text-center text-slate-400 text-xs">
+                      No period rows configured for this section. Click &apos;Add Period #1 Row&apos; above to create a schedule.
+                    </td>
+                  </tr>
+                ) : (
+                  activePeriodNumbers.map((pNum) => {
+                    const tpl = templateMap.get(pNum);
+                    const displayStart = tpl?.startTime || DEFAULT_TIMINGS[pNum]?.start || '09:00';
+                    const displayEnd = tpl?.endTime || DEFAULT_TIMINGS[pNum]?.end || '10:00';
 
-                  return (
-                    <tr key={pNum} className="hover:bg-slate-50/50 transition-colors">
-                      {/* Period Label Column with Edit Pencil Icon */}
-                      <td className="p-3 text-center bg-slate-50/70 border-r border-slate-200 shrink-0">
-                        <div className="flex items-center justify-center gap-1.5">
-                          <span className="font-bold text-sm text-slate-900 font-mono">#{pNum}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenTimingModal(pNum)}
-                            title={`Edit timing for Period #${pNum} across all days`}
-                            className="p-1 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-200 transition-all"
-                          >
-                            <Edit2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-slate-600 font-mono font-medium mt-0.5">
-                          {displayStart} - {displayEnd}
-                        </p>
-                        {tpl && (
-                          <span className="inline-block text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded-full mt-1">
-                            Fixed Time
-                          </span>
-                        )}
-                      </td>
+                    return (
+                      <tr key={pNum} className="hover:bg-slate-50/50 transition-colors">
+                        {/* Period Label Column with Edit Pencil & Delete Trash Icons */}
+                        <td className="p-3 text-center bg-slate-50/70 border-r border-slate-200 shrink-0">
+                          <div className="flex items-center justify-center gap-1">
+                            <span className="font-bold text-sm text-slate-900 font-mono">#{pNum}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenTimingModal(pNum)}
+                              title={`Edit timing for Period #${pNum} across all days`}
+                              className="p-1 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 border border-transparent hover:border-purple-200 transition-all"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenDeletePeriodModal(pNum)}
+                              title={`Delete entire Period #${pNum} row and remove all scheduled slots`}
+                              className="p-1 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 transition-all"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-600 font-mono font-medium mt-0.5">
+                            {displayStart} - {displayEnd}
+                          </p>
+                          {tpl && (
+                            <span className="inline-block text-[9px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded-full mt-1">
+                              Fixed Time
+                            </span>
+                          )}
+                        </td>
 
                       {/* Day Columns */}
                       {DAYS.map((day) => {
@@ -619,8 +694,9 @@ export const HodTimetable: React.FC = () => {
                       })}
                     </tr>
                   );
-                })}
-              </tbody>
+                })
+              )}
+            </tbody>
             </table>
           </div>
         ) : (
@@ -866,24 +942,75 @@ export const HodTimetable: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+          <div className="flex items-center justify-between gap-2 pt-4 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => setIsTimingModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800"
+              onClick={() => {
+                handleOpenDeletePeriodModal(editingTemplatePeriod);
+              }}
+              className="px-3 py-2 rounded-xl text-xs font-semibold text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 transition-all flex items-center gap-1.5"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete Entire Period Row</span>
+            </button>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsTimingModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isUpdatingTiming}
+                className="px-5 py-2 rounded-xl text-xs font-semibold gradient-btn flex items-center gap-2 text-white shadow-sm"
+              >
+                {isUpdatingTiming && <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+                <span>Apply to All Days</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete Period Row Strict Confirmation Modal */}
+      <Modal
+        isOpen={isDeletePeriodModalOpen}
+        onClose={() => setIsDeletePeriodModalOpen(false)}
+        title={`Delete Period #${deletingPeriodNumber} Row`}
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 p-3.5 bg-red-50 text-red-700 rounded-xl border border-red-200">
+            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5 text-red-600" />
+            <div className="text-xs space-y-1">
+              <p className="font-bold text-red-900">Are you sure?</p>
+              <p className="text-red-700 leading-relaxed">
+                This will permanently delete this period row and remove <strong>ALL scheduled classes (slots)</strong> assigned to <strong>Period #{deletingPeriodNumber}</strong> across all days for <strong>{currentSectionDoc?.name}</strong>.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setIsDeletePeriodModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-100 transition-colors"
             >
               Cancel
             </button>
             <button
-              type="submit"
-              disabled={isUpdatingTiming}
-              className="px-5 py-2 rounded-xl text-xs font-semibold gradient-btn flex items-center gap-2 text-white shadow-sm"
+              type="button"
+              onClick={handleDeletePeriodRow}
+              disabled={isDeletingPeriod}
+              className="px-5 py-2 rounded-xl text-xs font-semibold bg-red-600 hover:bg-red-700 text-white shadow-sm flex items-center gap-1.5 transition-all disabled:opacity-50"
             >
-              {isUpdatingTiming && <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-              <span>Apply to All Days</span>
+              {isDeletingPeriod && <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+              <span>Permanently Delete Period Row</span>
             </button>
           </div>
-        </form>
+        </div>
       </Modal>
 
       {/* Inconsistency Resolution Modal (Part B) */}

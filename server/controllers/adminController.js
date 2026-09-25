@@ -3962,6 +3962,116 @@ const updatePeriodTemplate = async (req, res) => {
   }
 };
 
+const deletePeriodTemplate = async (req, res) => {
+  const { sectionId, periodNumber } = req.params;
+  if (!sectionId || periodNumber === undefined) {
+    return res.status(400).json({ message: 'sectionId and periodNumber are required parameters.' });
+  }
+
+  const pNum = Number(periodNumber);
+  if (isNaN(pNum) || pNum < 1) {
+    return res.status(400).json({ message: 'Invalid period number.' });
+  }
+
+  try {
+    const secDoc = await Section.findById(sectionId);
+    if (!secDoc) {
+      return res.status(404).json({ message: 'Section not found.' });
+    }
+
+    // HOD Scope Verification
+    if (req.user && req.user.role === 'hod') {
+      const userYear = Number(req.user.year);
+      const userCourseId = req.user.course?._id ? req.user.course._id.toString() : (req.user.course ? req.user.course.toString() : null);
+      const secDept = await Department.findById(secDoc.department);
+      const secCourseId = secDept?.course?.toString();
+
+      let rawBatches = req.user.assignedBatches || req.user.batches || req.user.batch || [];
+      if (!Array.isArray(rawBatches)) rawBatches = [rawBatches];
+      const batchIds = rawBatches.map((b) => (b && b._id ? b._id.toString() : b ? b.toString() : '')).filter(Boolean);
+
+      if (batchIds.length > 0 && secDoc.batch) {
+        const secBatchId = secDoc.batch._id ? secDoc.batch._id.toString() : secDoc.batch.toString();
+        if (!batchIds.includes(secBatchId)) {
+          return res.status(403).json({ message: 'Access denied. Section does not belong to your managed batch(es).' });
+        }
+      } else if (userYear && Number(secDoc.year) !== userYear) {
+        return res.status(403).json({ message: 'Access denied. HOD can only manage timetable for their assigned course and year.' });
+      } else if (userCourseId && secCourseId !== userCourseId) {
+        return res.status(403).json({ message: 'Access denied. HOD can only manage timetable for their assigned course.' });
+      }
+    }
+
+    // Mongoose Transaction attempt
+    let mongoSession = null;
+    try {
+      mongoSession = await mongoose.startSession();
+      mongoSession.startTransaction();
+    } catch (sessionInitErr) {
+      mongoSession = null;
+    }
+
+    try {
+      const sessionOpts = mongoSession ? { session: mongoSession } : {};
+
+      // Check if any PeriodTemplates exist for this section
+      const existingTemplates = await PeriodTemplate.find({ section: sectionId }, null, sessionOpts);
+
+      if (existingTemplates.length === 0) {
+        // If no explicit template records existed yet, populate default templates 1..8 excluding deleted pNum
+        const defaultPeriods = [1, 2, 3, 4, 5, 6, 7, 8].filter((n) => n !== pNum);
+        const defaultTimings = {
+          1: { start: '09:00', end: '10:00' },
+          2: { start: '10:15', end: '11:15' },
+          3: { start: '11:30', end: '12:30' },
+          4: { start: '13:30', end: '14:30' },
+          5: { start: '14:45', end: '15:45' },
+          6: { start: '16:00', end: '17:00' },
+          7: { start: '17:15', end: '18:15' },
+          8: { start: '18:30', end: '19:30' },
+        };
+
+        const docsToInsert = defaultPeriods.map((n) => ({
+          section: sectionId,
+          periodNumber: n,
+          startTime: defaultTimings[n].start,
+          endTime: defaultTimings[n].end,
+        }));
+
+        await PeriodTemplate.insertMany(docsToInsert, sessionOpts);
+      } else {
+        // Delete specific PeriodTemplate document
+        await PeriodTemplate.findOneAndDelete({ section: sectionId, periodNumber: pNum }, sessionOpts);
+      }
+
+      // Cascade delete all scheduled PeriodSlots for this section and periodNumber
+      const deletedSlots = await PeriodSlot.deleteMany({ section: sectionId, periodNumber: pNum }, sessionOpts);
+
+      if (mongoSession) {
+        await mongoSession.commitTransaction();
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Period #${pNum} row and its ${deletedSlots.deletedCount || 0} scheduled slot(s) were permanently deleted for section '${secDoc.name}'.`,
+        deletedSlotsCount: deletedSlots.deletedCount || 0,
+      });
+    } catch (txErr) {
+      if (mongoSession) {
+        await mongoSession.abortTransaction();
+      }
+      throw txErr;
+    } finally {
+      if (mongoSession) {
+        mongoSession.endSession();
+      }
+    }
+  } catch (error) {
+    console.error('deletePeriodTemplate error:', error);
+    return res.status(500).json({ message: 'Error deleting period row', error: error.message });
+  }
+};
+
 const getPeriodTimingInconsistencies = async (req, res) => {
   try {
     const { section } = req.query;
@@ -5332,6 +5442,7 @@ module.exports = {
   getTeachersForCourse,
   getPeriodTemplates,
   updatePeriodTemplate,
+  deletePeriodTemplate,
   getPeriodTimingInconsistencies,
   resolvePeriodTimingInconsistency,
 };

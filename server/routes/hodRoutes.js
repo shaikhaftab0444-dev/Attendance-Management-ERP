@@ -43,9 +43,10 @@ router.post('/teacher-subjects', hodController.createTeacherSubjectAssignment);
 router.patch('/teacher-subjects/:id', hodController.updateTeacherSubjectAssignment);
 router.delete('/teacher-subjects/:id', hodController.deleteTeacherSubjectAssignment);
 
-// Timetable Schedule PDF & Import
+// Timetable Schedule PDF & Import & Templates
 router.get('/timetable/export-timetable-pdf', hodController.exportHodTimetablePdf);
 router.post('/timetable/import', uploadCsv.single('file'), adminController.importPeriodSlotsCsv);
+router.delete('/period-templates/:sectionId/:periodNumber', adminController.deletePeriodTemplate);
 
 // Reports & Low Attendance
 router.get('/reports/department', hodController.getDepartmentReports);

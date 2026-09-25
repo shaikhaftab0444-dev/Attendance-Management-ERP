@@ -4362,19 +4362,35 @@ const exportTimetablePdf = async (req, res) => {
   try {
     const settings = await Setting.findOne();
     const section = req.query.section || req.query.sectionId;
+    const batch = req.query.batch;
     if (!section) {
       return res.status(400).json({ message: 'Section ID query parameter is required.' });
     }
 
     const sectionDoc = await Section.findById(section)
       .populate({ path: 'department', populate: { path: 'course' } })
-      .populate('session');
+      .populate('session')
+      .populate('batch');
 
     if (!sectionDoc) {
       return res.status(404).json({ message: 'Section not found.' });
     }
 
-    let templates = await PeriodTemplate.find({ section }).sort({ periodNumber: 1 });
+    // 1. Fetch configured period templates for this section
+    const templates = await PeriodTemplate.find({ section }).sort({ periodNumber: 1 });
+
+    // 2. Fetch scheduled period slots for this section
+    const slotFilter = { section };
+    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
+      slotFilter.batch = batch;
+    }
+
+    const slots = await PeriodSlot.find(slotFilter)
+      .populate('subject', 'name code')
+      .populate('teacher', 'name email employeeId')
+      .populate('batch', 'name');
+
+    // 3. Dynamic Period Determination: Iterate over ONLY active period templates / configured periods
     let periods = [];
     if (templates.length > 0) {
       periods = templates.map((t) => ({
@@ -4382,23 +4398,26 @@ const exportTimetablePdf = async (req, res) => {
         label: t.label || `Period ${t.periodNumber}`,
         startTime: t.startTime,
         endTime: t.endTime,
-        isRecess: t.isRecess,
+        isRecess: Boolean(t.isRecess),
       }));
+    } else if (slots.length > 0) {
+      // If no explicit templates are saved, derive dynamically from existing scheduled slots
+      const slotPeriodMap = new Map();
+      slots.forEach((s) => {
+        if (!slotPeriodMap.has(s.periodNumber)) {
+          slotPeriodMap.set(s.periodNumber, {
+            periodNumber: s.periodNumber,
+            label: `Period ${s.periodNumber}`,
+            startTime: s.startTime || '09:00',
+            endTime: s.endTime || '10:00',
+            isRecess: Boolean(s.isRecess),
+          });
+        }
+      });
+      periods = Array.from(slotPeriodMap.values()).sort((a, b) => a.periodNumber - b.periodNumber);
     } else {
-      periods = [
-        { periodNumber: 1, startTime: '09:00', endTime: '09:50', isRecess: false },
-        { periodNumber: 2, startTime: '09:50', endTime: '10:40', isRecess: false },
-        { periodNumber: 3, startTime: '10:40', endTime: '11:30', isRecess: false },
-        { periodNumber: 4, startTime: '11:30', endTime: '12:10', isRecess: true },
-        { periodNumber: 5, startTime: '12:10', endTime: '01:00', isRecess: false },
-        { periodNumber: 6, startTime: '01:00', endTime: '01:50', isRecess: false },
-        { periodNumber: 7, startTime: '01:50', endTime: '02:40', isRecess: false },
-      ];
+      periods = [];
     }
-
-    const slots = await PeriodSlot.find({ section })
-      .populate('subject', 'name code')
-      .populate('teacher', 'name email employeeId');
 
     const html = buildTimetablePdfHtml({
       institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',

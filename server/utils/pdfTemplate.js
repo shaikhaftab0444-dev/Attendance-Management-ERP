@@ -302,12 +302,14 @@ function buildTimetablePdfHtml({
     slotMap.set(`${s.dayOfWeek}_${s.periodNumber}`, s);
   });
 
-  const periodRowsHtml = periods
-    .map((p) => {
-      const isRecess = Boolean(p.isRecess);
+  const periodRowsHtml =
+    periods.length > 0
+      ? periods
+          .map((p) => {
+            const isRecess = Boolean(p.isRecess);
 
-      if (isRecess) {
-        return `
+            if (isRecess) {
+              return `
         <tr class="recess-row">
           <td class="period-header">
             <div class="period-num">P${p.periodNumber}</div>
@@ -317,40 +319,43 @@ function buildTimetablePdfHtml({
             <div class="recess-banner">★ RECESS / BREAK ★</div>
           </td>
         </tr>`;
-      }
+            }
 
-      const dayCells = daysOfWeek
-        .map((d) => {
-          const slot = slotMap.get(`${d.key}_${p.periodNumber}`);
-          if (!slot || !slot.subject) {
-            return `<td class="slot-cell empty-slot"><span class="free-label">— Free —</span></td>`;
-          }
+            const dayCells = daysOfWeek
+              .map((d) => {
+                const slot = slotMap.get(`${d.key}_${p.periodNumber}`);
+                if (!slot || !slot.subject) {
+                  return `<td class="slot-cell empty-slot"><span class="free-label">— Free —</span></td>`;
+                }
 
-          const subName = slot.subject.name || 'Subject';
-          const subCode = slot.subject.code || '';
-          const teacherName = slot.teacher?.name || 'Unassigned Faculty';
-          const room = slot.room ? `Room ${escapeHtml(slot.room)}` : '';
+                const subName = slot.subject.name || 'Subject';
+                const subCode = slot.subject.code || '';
+                const teacherName = slot.teacher?.name || 'Unassigned Faculty';
+                const room = slot.room ? `Room ${escapeHtml(slot.room)}` : '';
 
-          return `
+                return `
           <td class="slot-cell active-slot">
             <div class="slot-sub-code">${escapeHtml(subCode)}</div>
             <div class="slot-sub-name">${escapeHtml(subName)}</div>
             <div class="slot-teacher">${escapeHtml(teacherName)}</div>
             ${room ? `<div class="slot-room">${room}</div>` : ''}
           </td>`;
-        })
-        .join('');
+              })
+              .join('');
 
-      return `
-      <tr>
-        <td class="period-header">
-          <div class="period-num">P${p.periodNumber}</div>
-          <div class="period-time">${escapeHtml(p.startTime)} - ${escapeHtml(p.endTime)}</div>
-        </td>
-        ${dayCells}
-      </tr>`;
-    })
-    .join('');
+            return `
+        <tr>
+          <td class="period-header">
+            <div class="period-num">P${p.periodNumber}</div>
+            <div class="period-time">${escapeHtml(p.startTime)} - ${escapeHtml(p.endTime)}</div>
+          </td>
+          ${dayCells}
+        </tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="7" class="empty-slot" style="padding: 24px; text-align: center; color: #94a3b8; font-style: italic;">No timetable periods configured for this section.</td></tr>`;
+
+  const batchName = section?.batch?.name || (typeof section?.batch === 'string' ? section.batch : '');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -554,6 +559,7 @@ function buildTimetablePdfHtml({
     <div class="section-pills">
       ${course?.code ? `<span class="pill pill-blue">${escapeHtml(course.code)}</span>` : ''}
       ${department?.name ? `<span class="pill pill-purple">${escapeHtml(department.name)} (${escapeHtml(department.code || '')})</span>` : ''}
+      ${batchName ? `<span class="pill pill-purple">${escapeHtml(batchName)} Batch</span>` : ''}
       ${section?.year ? `<span class="pill pill-emerald">Year ${escapeHtml(section.year)}</span>` : ''}
       ${section?.semester ? `<span class="pill pill-blue">Sem ${escapeHtml(section.semester)}</span>` : ''}
     </div>

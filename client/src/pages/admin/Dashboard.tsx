@@ -166,22 +166,22 @@ export const AdminDashboard: React.FC = () => {
           </span>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase tracking-wider text-slate-600 border-b border-slate-200">
+        <div className="w-full overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full min-w-full text-left text-xs md:text-sm border-collapse">
+            <thead className="bg-slate-50 text-[11px] md:text-xs uppercase tracking-wider text-slate-600 border-b border-slate-200">
               <tr>
-                <th className="py-3.5 px-4 font-semibold">Academic Department</th>
-                <th className="py-3.5 px-4 font-semibold text-center">1st Year</th>
-                <th className="py-3.5 px-4 font-semibold text-center">2nd Year</th>
-                <th className="py-3.5 px-4 font-semibold text-center">3rd Year</th>
-                <th className="py-3.5 px-4 font-semibold text-center">4th Year</th>
-                <th className="py-3.5 px-4 font-semibold text-right">Dept Total</th>
+                <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold whitespace-nowrap">Academic Department</th>
+                <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold text-center whitespace-nowrap">1st Year</th>
+                <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold text-center whitespace-nowrap">2nd Year</th>
+                <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold text-center whitespace-nowrap">3rd Year</th>
+                <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold text-center whitespace-nowrap">4th Year</th>
+                <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold text-right whitespace-nowrap">Dept Total</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {departmentYearMatrix.map((row) => (
                 <tr key={row.departmentId} className="hover:bg-slate-50/70 transition-colors">
-                  <td className="py-3.5 px-4">
+                  <td className="py-3 px-3.5 md:py-3.5 md:px-4 whitespace-nowrap">
                     <div className="flex items-center gap-2.5">
                       <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-700">
                         {row.code}
@@ -189,27 +189,27 @@ export const AdminDashboard: React.FC = () => {
                       <span className="font-semibold text-slate-800">{row.name}</span>
                     </div>
                   </td>
-                  <td className="py-3.5 px-4 text-center tabular-nums">
+                  <td className="py-3 px-3.5 md:py-3.5 md:px-4 text-center tabular-nums whitespace-nowrap">
                     <span className={row.year1 > 0 ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
                       {row.year1}
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 text-center tabular-nums">
+                  <td className="py-3 px-3.5 md:py-3.5 md:px-4 text-center tabular-nums whitespace-nowrap">
                     <span className={row.year2 > 0 ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
                       {row.year2}
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 text-center tabular-nums">
+                  <td className="py-3 px-3.5 md:py-3.5 md:px-4 text-center tabular-nums whitespace-nowrap">
                     <span className={row.year3 > 0 ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
                       {row.year3}
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 text-center tabular-nums">
+                  <td className="py-3 px-3.5 md:py-3.5 md:px-4 text-center tabular-nums whitespace-nowrap">
                     <span className={row.year4 > 0 ? 'text-slate-800 font-semibold' : 'text-slate-400'}>
                       {row.year4}
                     </span>
                   </td>
-                  <td className="py-3.5 px-4 text-right tabular-nums font-bold text-blue-600">
+                  <td className="py-3 px-3.5 md:py-3.5 md:px-4 text-right tabular-nums font-bold text-blue-600 whitespace-nowrap">
                     {row.total}
                   </td>
                 </tr>

@@ -344,27 +344,43 @@ export const HodReports: React.FC = () => {
             </span>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-700 uppercase tracking-wider border-b border-slate-200 font-bold">
-                <tr>
-                  <th className="py-2.5 px-3">Subject Name</th>
-                  <th className="py-2.5 px-3">Total Classes</th>
-                  <th className="py-2.5 px-3">Present</th>
-                  <th className="py-2.5 px-3">Late</th>
-                  <th className="py-2.5 px-3">Absent</th>
-                  <th className="py-2.5 px-3">Subject %</th>
+          <div className="w-full md:rounded-xl md:border md:border-slate-200 md:bg-white md:overflow-x-auto">
+            <table className="w-full text-left text-xs md:text-sm border-collapse block md:table">
+              <thead className="hidden md:table-header-group bg-slate-50 text-slate-700 uppercase tracking-wider border-b border-slate-200 text-[11px] md:text-xs font-bold">
+                <tr className="md:table-row">
+                  <th className="py-2.5 px-3 md:py-3 md:px-4 whitespace-nowrap">Subject Name</th>
+                  <th className="py-2.5 px-3 md:py-3 md:px-4 whitespace-nowrap">Total Classes</th>
+                  <th className="py-2.5 px-3 md:py-3 md:px-4 whitespace-nowrap">Present</th>
+                  <th className="py-2.5 px-3 md:py-3 md:px-4 whitespace-nowrap">Late</th>
+                  <th className="py-2.5 px-3 md:py-3 md:px-4 whitespace-nowrap">Absent</th>
+                  <th className="py-2.5 px-3 md:py-3 md:px-4 whitespace-nowrap">Subject %</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="block md:table-row-group space-y-2.5 md:space-y-0 divide-y-0 md:divide-y md:divide-slate-100">
                 {selectedStudent?.subjectWise?.map((sw: any, idx: number) => (
-                  <tr key={idx} className="hover:bg-slate-50/60">
-                    <td className="py-2.5 px-3 font-semibold text-slate-900">{sw.name}</td>
-                    <td className="py-2.5 px-3 tabular-nums text-slate-700">{sw.total}</td>
-                    <td className="py-2.5 px-3 tabular-nums text-emerald-600 font-bold">{sw.present}</td>
-                    <td className="py-2.5 px-3 tabular-nums text-amber-600 font-bold">{sw.late}</td>
-                    <td className="py-2.5 px-3 tabular-nums text-rose-600 font-bold">{sw.absent}</td>
-                    <td className="py-2.5 px-3 tabular-nums font-bold">
+                  <tr key={idx} className="block bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-1.5 md:space-y-0 md:bg-transparent md:border-0 md:p-0 md:table-row hover:bg-slate-50/60 transition-colors">
+                    <td className="flex items-center justify-between md:table-cell py-0 md:py-3 md:px-4 font-semibold text-slate-900">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase md:hidden">Subject</span>
+                      <span>{sw.name}</span>
+                    </td>
+                    <td className="flex items-center justify-between md:table-cell py-0 md:py-3 md:px-4 tabular-nums text-slate-700">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase md:hidden">Classes</span>
+                      <span>{sw.total}</span>
+                    </td>
+                    <td className="flex items-center justify-between md:table-cell py-0 md:py-3 md:px-4 tabular-nums text-emerald-600 font-bold">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase md:hidden">Present</span>
+                      <span>{sw.present}</span>
+                    </td>
+                    <td className="flex items-center justify-between md:table-cell py-0 md:py-3 md:px-4 tabular-nums text-amber-600 font-bold">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase md:hidden">Late</span>
+                      <span>{sw.late}</span>
+                    </td>
+                    <td className="flex items-center justify-between md:table-cell py-0 md:py-3 md:px-4 tabular-nums text-rose-600 font-bold">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase md:hidden">Absent</span>
+                      <span>{sw.absent}</span>
+                    </td>
+                    <td className="flex items-center justify-between md:table-cell py-0 md:py-3 md:px-4 tabular-nums font-bold">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase md:hidden">Attendance %</span>
                       <span
                         className={
                           sw.percentage >= threshold ? 'text-emerald-600' : 'text-rose-600'

@@ -477,15 +477,15 @@ export const HodTimetable: React.FC = () => {
         </div>
 
         {selectedSection ? (
-          <div className="overflow-x-auto rounded-xl border border-slate-200">
-            <table className="w-full text-left border-collapse min-w-[800px]">
-              <thead className="bg-slate-50 text-slate-700 text-xs uppercase tracking-wider border-b border-slate-200">
+          <div className="w-full overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[800px] text-left border-collapse text-xs md:text-sm">
+              <thead className="bg-slate-50 text-slate-700 text-[11px] md:text-xs uppercase tracking-wider border-b border-slate-200">
                 <tr>
-                  <th className="p-3 w-32 text-center font-bold text-slate-500 border-r border-slate-200">
+                  <th className="p-3 w-32 text-center font-bold text-slate-500 border-r border-slate-200 whitespace-nowrap">
                     Period #
                   </th>
                   {DAYS.map((day) => (
-                    <th key={day.id} className="p-3 text-center font-bold border-r border-slate-200 last:border-r-0">
+                    <th key={day.id} className="p-3 text-center font-bold border-r border-slate-200 last:border-r-0 whitespace-nowrap">
                       {day.name}
                     </th>
                   ))}

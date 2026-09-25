@@ -278,34 +278,39 @@ export const TeacherMarkAttendance: React.FC = () => {
           </div>
 
           {/* Student Attendance List */}
-          <div className="overflow-x-auto rounded-xl border border-slate-200/80">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-4">Roll No</th>
-                  <th className="py-3 px-4">Student Name</th>
-                  <th className="py-3 px-4 text-center">Attendance Status</th>
+          <div className="w-full md:rounded-xl md:border md:border-slate-200/80 md:bg-white md:overflow-x-auto">
+            <table className="w-full text-left text-xs md:text-sm border-collapse block md:table">
+              <thead className="hidden md:table-header-group bg-slate-50 text-slate-600 text-[11px] md:text-xs uppercase tracking-wider border-b border-slate-200">
+                <tr className="md:table-row">
+                  <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold whitespace-nowrap">Roll No</th>
+                  <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold whitespace-nowrap">Student Name</th>
+                  <th className="py-3 px-3.5 md:py-3.5 md:px-4 font-semibold text-center whitespace-nowrap">Attendance Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="block md:table-row-group space-y-3 md:space-y-0 divide-y-0 md:divide-y md:divide-slate-100">
                 {students.map((student) => {
                   const currentStatus = records[student._id] || 'present';
                   return (
-                    <tr key={student._id} className="hover:bg-slate-50/70 transition-colors">
-                      <td className="py-3 px-4 font-mono font-semibold text-xs text-slate-600">
-                        {student.rollNumber}
+                    <tr
+                      key={student._id}
+                      className="block bg-white p-4 rounded-2xl border border-slate-200/90 shadow-sm space-y-2.5 md:space-y-0 md:p-0 md:border-0 md:rounded-none md:shadow-none md:table-row hover:bg-slate-50/70 transition-colors"
+                    >
+                      <td className="flex items-center justify-between md:table-cell py-0 md:py-3.5 md:px-4 font-mono font-semibold text-xs text-slate-600">
+                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider md:hidden">Roll No</span>
+                        <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-800">{student.rollNumber}</span>
                       </td>
-                      <td className="py-3 px-4 font-medium text-slate-900 text-sm">
-                        {student.name}
+                      <td className="flex items-center justify-between md:table-cell py-0 md:py-3.5 md:px-4 font-medium text-slate-900 text-xs md:text-sm">
+                        <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider md:hidden">Student</span>
+                        <span className="font-semibold text-slate-900">{student.name}</span>
                       </td>
-                      <td className="py-3 px-4">
-                        <div className="flex items-center justify-center gap-1.5">
+                      <td className="pt-2 border-t border-slate-100 md:border-t-0 md:pt-0 md:table-cell md:py-3.5 md:px-4">
+                        <div className="grid grid-cols-3 sm:flex sm:items-center sm:justify-center gap-1.5 w-full">
                           {/* Present Toggle */}
                           <button
                             type="button"
                             disabled={isHoliday || (isMarked && !canEdit)}
                             onClick={() => handleStatusChange(student._id, 'present')}
-                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                            className={`py-2 px-3 md:py-1 rounded-xl md:rounded-lg text-xs font-semibold transition-all text-center ${
                               currentStatus === 'present'
                                 ? 'bg-emerald-600 text-white shadow-sm'
                                 : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -319,7 +324,7 @@ export const TeacherMarkAttendance: React.FC = () => {
                             type="button"
                             disabled={isHoliday || (isMarked && !canEdit)}
                             onClick={() => handleStatusChange(student._id, 'late')}
-                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                            className={`py-2 px-3 md:py-1 rounded-xl md:rounded-lg text-xs font-semibold transition-all text-center ${
                               currentStatus === 'late'
                                 ? 'bg-amber-500 text-white shadow-sm'
                                 : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'
@@ -333,7 +338,7 @@ export const TeacherMarkAttendance: React.FC = () => {
                             type="button"
                             disabled={isHoliday || (isMarked && !canEdit)}
                             onClick={() => handleStatusChange(student._id, 'absent')}
-                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                            className={`py-2 px-3 md:py-1 rounded-xl md:rounded-lg text-xs font-semibold transition-all text-center ${
                               currentStatus === 'absent'
                                 ? 'bg-rose-600 text-white shadow-sm'
                                 : 'bg-slate-50 text-slate-600 hover:bg-slate-100 border border-slate-200'

@@ -10,6 +10,20 @@
   }
 }
 
+/* Global Responsive Table Utilities */
+@layer components {
+  .responsive-table-container {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  table th,
+  table td {
+    white-space: nowrap;
+  }
+}
+
 /* Modern Light Card & Surface styles */
 .saas-card {
   background-color: #FFFFFF;

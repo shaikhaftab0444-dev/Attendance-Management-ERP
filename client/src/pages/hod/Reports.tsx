@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Building2,
+  Layers,
 } from 'lucide-react';
 import api from '../../lib/api';
 import { StatCard } from '../../components/ui/StatCard';
@@ -13,14 +14,16 @@ import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { Department } from '../../types';
+import { Department, Batch } from '../../types';
 
 export const HodReports: React.FC = () => {
   const { user } = useAuth();
   const [reportData, setReportData] = useState<any>(null);
   const [lowAttendanceData, setLowAttendanceData] = useState<any>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
   const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [batchFilter, setBatchFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
 
   // Drilldown modal for student subjectwise attendance
@@ -40,15 +43,18 @@ export const HodReports: React.FC = () => {
       setIsLoading(true);
       const params: any = {};
       if (deptFilter !== 'all') params.department = deptFilter;
+      if (batchFilter !== 'all') params.batch = batchFilter;
 
-      const [repRes, lowRes, deptRes] = await Promise.all([
+      const [repRes, lowRes, deptRes, batchRes] = await Promise.all([
         api.get('/hod/reports/department', { params }),
         api.get('/hod/reports/low-attendance', { params }),
         api.get('/hod/departments'),
+        api.get('/hod/batches'),
       ]);
       setReportData(repRes.data);
       setLowAttendanceData(lowRes.data);
       setDepartments(deptRes.data);
+      setBatches(batchRes.data);
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching reports', 'error');
     } finally {
@@ -58,7 +64,7 @@ export const HodReports: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [deptFilter]);
+  }, [deptFilter, batchFilter]);
 
   const overallPct = reportData?.overallPercentage || 0;
   const threshold = reportData?.thresholdPercent || 75;
@@ -157,7 +163,7 @@ export const HodReports: React.FC = () => {
       ),
     },
     {
-      header: 'Classes Needed for 75%',
+      header: `Classes Needed for ${threshold}%`,
       render: (row) => (
         <span className="text-xs font-bold text-amber-700 tabular-nums">
           +{row.deficitClasses} more
@@ -199,7 +205,7 @@ export const HodReports: React.FC = () => {
             <select
               value={deptFilter}
               onChange={(e) => setDeptFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-blue-500"
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-purple-500"
             >
               <option value="all">All Departments</option>
               {departments.map((d) => (
@@ -209,11 +215,32 @@ export const HodReports: React.FC = () => {
               ))}
             </select>
           </div>
+
+          {/* Batch Filter */}
+          <div className="flex items-center gap-2 p-2 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+            <Layers className="w-4 h-4 text-indigo-600" />
+            <select
+              value={batchFilter}
+              onChange={(e) => setBatchFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500"
+            >
+              <option value="all">All Batch Cohorts</option>
+              {batches.map((b) => (
+                <option key={b._id} value={b._id}>
+                  {b.name} ({b.startYear}-{b.endYear})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <ImportExportBar
             entityName="Department Analytics"
             pdfExportUrl="/hod/reports/export-pdf"
             pdfFilename={`Year_${user?.year || 1}_Analytics_Report.pdf`}
-            queryParams={deptFilter !== 'all' ? { department: deptFilter } : {}}
+            queryParams={{
+              ...(deptFilter !== 'all' ? { department: deptFilter } : {}),
+              ...(batchFilter !== 'all' ? { batch: batchFilter } : {}),
+            }}
           />
         </div>
       </div>

@@ -4,14 +4,15 @@ const roleGuard = (...allowedRoles) => {
       return res.status(401).json({ message: 'Authentication required.' });
     }
 
-    if (!allowedRoles.includes(req.user.role)) {
-      return res.status(403).json({
-        message: `Forbidden. Role '${req.user.role}' is not authorized to access this resource.`,
-      });
+    if (allowedRoles.includes(req.user.role)) {
+      return next();
     }
 
-    next();
+    return res.status(403).json({
+      message: `Forbidden. Role '${req.user.role}' is not authorized to access this resource.`,
+    });
   };
 };
 
 module.exports = roleGuard;
+

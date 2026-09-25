@@ -20,6 +20,7 @@ import {
   CalendarOff,
   X,
   School,
+  CalendarRange,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { StatusPill } from '../ui/StatusPill';
@@ -48,6 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, isMobile = fa
         { label: 'Courses', icon: School, path: '/admin/courses' },
         { label: 'Departments', icon: Building2, path: '/admin/departments' },
         { label: 'Batches', icon: Calendar, path: '/admin/batches' },
+        { label: 'Academic Sessions', icon: CalendarRange, path: '/admin/sessions' },
         { label: 'Staff Directory', icon: Users, path: '/admin/users' },
         { label: 'Students Roster', icon: GraduationCap, path: '/admin/students' },
         { label: 'Sections', icon: Layers, path: '/admin/sections' },
@@ -64,6 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, isMobile = fa
       return [
         { label: 'Department Overview', icon: LayoutDashboard, path: '/hod/dashboard' },
         { label: 'Faculty Members', icon: Users, path: '/hod/teachers' },
+        { label: 'Curriculum Subjects', icon: BookOpen, path: '/hod/subjects' },
         { label: 'Subject Allocations', icon: BookMarked, path: '/hod/assignments' },
         { label: 'Timetable Schedule', icon: CalendarDays, path: '/hod/timetable' },
         { label: 'Defaulters Tracking', icon: UserX, path: '/hod/defaulters' },

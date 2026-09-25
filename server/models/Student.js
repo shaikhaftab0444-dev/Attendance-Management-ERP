@@ -55,6 +55,23 @@ const studentSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  condonedPeriods: {
+    type: Number,
+    default: 0,
+  },
+  condonationReason: {
+    type: String,
+    default: '',
+  },
+  condonedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+  condonedAt: {
+    type: Date,
+    default: null,
+  },
 }, {
   timestamps: true,
 });

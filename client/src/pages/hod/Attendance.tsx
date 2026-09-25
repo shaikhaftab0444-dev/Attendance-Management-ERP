@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Calendar, Eye, Building2 } from 'lucide-react';
+import { Calendar, Eye, Building2, Layers } from 'lucide-react';
 import api from '../../lib/api';
-import { Attendance, Department } from '../../types';
+import { Attendance, Department, Batch } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -14,7 +14,9 @@ export const HodAttendance: React.FC = () => {
   const { user } = useAuth();
   const [logs, setLogs] = useState<Attendance[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
   const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [batchFilter, setBatchFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
   const [selectedRecord, setSelectedRecord] = useState<Attendance | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -32,13 +34,16 @@ export const HodAttendance: React.FC = () => {
       setIsLoading(true);
       const params: any = {};
       if (deptFilter !== 'all') params.department = deptFilter;
+      if (batchFilter !== 'all') params.batch = batchFilter;
 
-      const [attRes, deptRes] = await Promise.all([
+      const [attRes, deptRes, batchRes] = await Promise.all([
         api.get('/hod/attendance', { params }),
         api.get('/hod/departments'),
+        api.get('/hod/batches'),
       ]);
       setLogs(attRes.data);
       setDepartments(deptRes.data);
+      setBatches(batchRes.data);
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching attendance logs', 'error');
     } finally {
@@ -48,7 +53,7 @@ export const HodAttendance: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [deptFilter]);
+  }, [deptFilter, batchFilter]);
 
   const columns: Column<Attendance>[] = [
     {
@@ -83,6 +88,22 @@ export const HodAttendance: React.FC = () => {
               </span>
             )}
           </div>
+        );
+      },
+    },
+    {
+      header: 'Cohort Batch',
+      render: (row) => {
+        const sec = row.section as any;
+        const batch = sec?.batch || (row.periodSlot as any)?.batch || (row.subject as any)?.batch;
+        const batchName = batch?.name || (typeof batch === 'string' ? batch : '');
+        return batchName ? (
+          <span className="inline-flex items-center gap-1 font-bold text-[11px] px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700">
+            <Layers className="w-3 h-3 text-indigo-600" />
+            <span>{batchName}</span>
+          </span>
+        ) : (
+          <span className="text-[10px] text-slate-400 italic">Universal</span>
         );
       },
     },
@@ -123,7 +144,7 @@ export const HodAttendance: React.FC = () => {
             setSelectedRecord(row);
             setIsModalOpen(true);
           }}
-          className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold shadow-sm"
+          className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition-colors flex items-center gap-1.5 text-xs font-semibold shadow-sm cursor-pointer"
         >
           <Eye className="w-3.5 h-3.5 text-purple-600" />
           <span>Inspect</span>
@@ -151,7 +172,7 @@ export const HodAttendance: React.FC = () => {
             <select
               value={deptFilter}
               onChange={(e) => setDeptFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-blue-500"
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-purple-500"
             >
               <option value="all">All Departments</option>
               {departments.map((d) => (
@@ -161,11 +182,32 @@ export const HodAttendance: React.FC = () => {
               ))}
             </select>
           </div>
+
+          {/* Batch Filter */}
+          <div className="flex items-center gap-2 p-2 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+            <Layers className="w-4 h-4 text-indigo-600" />
+            <select
+              value={batchFilter}
+              onChange={(e) => setBatchFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500"
+            >
+              <option value="all">All Batch Cohorts</option>
+              {batches.map((b) => (
+                <option key={b._id} value={b._id}>
+                  {b.name} ({b.startYear}-{b.endYear})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <ImportExportBar
             entityName="Attendance Audit"
             pdfExportUrl="/hod/attendance/export-pdf"
             pdfFilename={`Year_${user?.year || 1}_Attendance_Audit.pdf`}
-            queryParams={deptFilter !== 'all' ? { department: deptFilter } : {}}
+            queryParams={{
+              ...(deptFilter !== 'all' ? { department: deptFilter } : {}),
+              ...(batchFilter !== 'all' ? { batch: batchFilter } : {}),
+            }}
           />
         </div>
       </div>
@@ -174,12 +216,13 @@ export const HodAttendance: React.FC = () => {
         columns={columns}
         data={logs}
         isLoading={isLoading}
-        searchPlaceholder="Search audit logs by subject, teacher, or section..."
+        searchPlaceholder="Search audit logs by subject, teacher, section, or batch..."
         searchFilter={(row, q) =>
           ((row.subject as any)?.name?.toLowerCase().includes(q) ?? false) ||
           ((row.teacher as any)?.name?.toLowerCase().includes(q) ?? false) ||
           ((row.section as any)?.name?.toLowerCase().includes(q) ?? false) ||
-          ((row.section as any)?.department?.code?.toLowerCase().includes(q) ?? false)
+          ((row.section as any)?.department?.code?.toLowerCase().includes(q) ?? false) ||
+          ((row.section as any)?.batch?.name?.toLowerCase().includes(q) ?? false)
         }
       />
 

@@ -18,5 +18,6 @@ router.get('/reports/my-subjects', teacherController.getMyReports);
 router.get('/reports/export-pdf', teacherController.exportTeacherReportsPdf);
 router.get('/defaulters/export-pdf', teacherController.exportTeacherDefaultersPdf);
 router.get('/defaulters', teacherController.getTeacherDefaulters);
+router.get('/batches', teacherController.getMyBatches);
 
 module.exports = router;

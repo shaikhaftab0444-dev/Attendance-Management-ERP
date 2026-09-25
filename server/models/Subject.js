@@ -34,6 +34,15 @@ const subjectSchema = new mongoose.Schema({
     required: true,
     default: 3,
   },
+  batch: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Batch',
+    default: null,
+  },
+  isActive: {
+    type: Boolean,
+    default: true,
+  },
 }, {
   timestamps: true,
 });

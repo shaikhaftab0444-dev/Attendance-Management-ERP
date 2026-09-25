@@ -10,14 +10,28 @@ const { uploadCsv } = require('../middleware/upload');
 router.use(auth, roleGuard('hod'));
 
 router.get('/departments', hodController.getDepartments);
+router.get('/batches', hodController.getBatches);
 router.get('/teacher-directory', hodController.getTeacherDirectory);
 
-// Faculty
+// Faculty & Staff Management (HOD Scoped CRUD)
 router.get('/teachers', hodController.getDepartmentTeachers);
+router.post('/teachers', hodController.createStaff);
+router.patch('/teachers/:id', hodController.updateStaff);
+router.delete('/teachers/:id', hodController.deleteStaff);
+router.get('/staff', hodController.getDepartmentTeachers);
+router.post('/staff', hodController.createStaff);
+router.patch('/staff/:id', hodController.updateStaff);
+router.delete('/staff/:id', hodController.deleteStaff);
 router.get('/teachers/export-pdf', hodController.exportHodTeachersPdf);
 
-// Subjects & Sections
+// Subjects (HOD Scoped CRUD) & Sections
 router.get('/subjects', hodController.getDepartmentSubjects);
+router.post('/subjects', hodController.createSubject);
+router.patch('/subjects/:id/archive', hodController.archiveSubject);
+router.patch('/subjects/:id/restore', hodController.restoreSubject);
+router.patch('/subjects/:id', hodController.updateSubject);
+router.delete('/subjects/:id/force', hodController.forceDeleteSubject);
+router.delete('/subjects/:id', hodController.deleteSubject);
 router.get('/sections', hodController.getDepartmentSections);
 
 // Subject Allocations & CSV/PDF
@@ -26,6 +40,8 @@ router.get('/teacher-subjects/export-pdf', hodController.exportHodTeacherSubject
 router.post('/teacher-subjects/import', uploadCsv.single('file'), hodController.importHodTeacherSubjectsCsv);
 router.get('/teacher-subjects', hodController.getTeacherSubjectAssignments);
 router.post('/teacher-subjects', hodController.createTeacherSubjectAssignment);
+router.patch('/teacher-subjects/:id', hodController.updateTeacherSubjectAssignment);
+router.delete('/teacher-subjects/:id', hodController.deleteTeacherSubjectAssignment);
 
 // Timetable Schedule PDF & Import
 router.get('/timetable/export-timetable-pdf', hodController.exportHodTimetablePdf);

@@ -48,6 +48,18 @@ const userSchema = new mongoose.Schema({
     ],
     default: undefined,
   },
+  assignedBatches: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Batch',
+    },
+  ],
+  batches: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Batch',
+    },
+  ],
   employeeId: {
     type: String,
     trim: true,
@@ -67,15 +79,6 @@ const userSchema = new mongoose.Schema({
     default: Date.now,
   },
 });
-
-// Partial unique index: Ensure only ONE active HOD per (Course + Year) combination
-userSchema.index(
-  { course: 1, year: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { role: 'hod', course: { $type: 'objectId' }, year: { $type: 'number' } },
-  }
-);
 
 module.exports = mongoose.model('User', userSchema);
 

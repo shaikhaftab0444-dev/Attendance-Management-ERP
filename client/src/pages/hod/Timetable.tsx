@@ -15,7 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Section, Subject, User as UserType, Department, PeriodSlot, PeriodTemplate } from '../../types';
+import { Section, Subject, User as UserType, Department, PeriodSlot, PeriodTemplate, Batch } from '../../types';
 import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
 import { useAuth } from '../../context/AuthContext';
@@ -49,6 +49,9 @@ export const HodTimetable: React.FC = () => {
 
   const [departments, setDepartments] = useState<Department[]>([]);
   const [selectedDepartment, setSelectedDepartment] = useState<string>('');
+
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [selectedBatch, setSelectedBatch] = useState<string>('all');
 
   const [sections, setSections] = useState<Section[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>('');
@@ -106,14 +109,16 @@ export const HodTimetable: React.FC = () => {
 
   const fetchInitialData = async () => {
     try {
-      const [deptRes, secRes, subRes] = await Promise.all([
+      const [deptRes, secRes, subRes, batchRes] = await Promise.all([
         api.get('/hod/departments'),
         api.get('/hod/sections'),
         api.get('/hod/subjects'),
+        api.get('/hod/batches'),
       ]);
       setDepartments(deptRes.data);
       setSections(secRes.data);
       setSubjects(subRes.data);
+      setBatches(batchRes.data);
 
       if (deptRes.data.length > 0) {
         setSelectedDepartment(deptRes.data[0]._id);
@@ -150,11 +155,17 @@ export const HodTimetable: React.FC = () => {
   }, [courseId, selectedDepartment, lockedYear, showAllFaculty]);
 
   const filteredSections = useMemo(() => {
-    if (!selectedDepartment) return [];
-    return sections.filter(
-      (s) => (s.department?._id || s.department) === selectedDepartment
-    );
-  }, [sections, selectedDepartment]);
+    return sections.filter((s) => {
+      if (selectedDepartment && (s.department?._id || s.department) !== selectedDepartment) {
+        return false;
+      }
+      if (selectedBatch !== 'all') {
+        const sBatchId = (s.batch?._id || s.batch);
+        if (sBatchId !== selectedBatch) return false;
+      }
+      return true;
+    });
+  }, [sections, selectedDepartment, selectedBatch]);
 
   useEffect(() => {
     if (filteredSections.length > 0) {
@@ -342,6 +353,7 @@ export const HodTimetable: React.FC = () => {
 
     const secDoc = sections.find((s) => s._id === selectedSection);
     const sessionId = (secDoc?.session as any)?._id || secDoc?.session;
+    const batchId = (secDoc?.batch as any)?._id || secDoc?.batch || (selectedBatch !== 'all' ? selectedBatch : null);
 
     const payload: any = {
       section: selectedSection,
@@ -350,6 +362,7 @@ export const HodTimetable: React.FC = () => {
       startTime: modalStartTime,
       endTime: modalEndTime,
       session: sessionId,
+      batch: batchId,
       isRecess: modalIsRecess,
       recessLabel: modalIsRecess ? modalRecessLabel.trim() : '',
       subject: modalIsRecess ? null : modalSubject,
@@ -399,12 +412,27 @@ export const HodTimetable: React.FC = () => {
           <p className="text-sm text-slate-500 mt-1">Manage weekly schedule, period timing, and faculty allocations</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          {batches.length > 0 && (
+            <select
+              value={selectedBatch}
+              onChange={(e) => setSelectedBatch(e.target.value)}
+              className="px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 shadow-sm focus:outline-none focus:border-indigo-500"
+            >
+              <option value="all">All Cohort Batches</option>
+              {batches.map((b) => (
+                <option key={b._id} value={b._id}>
+                  Batch {b.name} ({b.startYear}-{b.endYear})
+                </option>
+              ))}
+            </select>
+          )}
+
           <select
             value={selectedSection}
             onChange={(e) => setSelectedSection(e.target.value)}
             className="px-4 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-medium text-slate-700 shadow-sm focus:outline-none focus:border-purple-500"
           >
-            {sections.map((sec) => (
+            {filteredSections.map((sec) => (
               <option key={sec._id} value={sec._id}>
                 Section {sec.name} ({sec.department?.code || 'Dept'} - Sem {sec.semester})
               </option>

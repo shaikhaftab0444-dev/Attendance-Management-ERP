@@ -3,6 +3,9 @@ const TeacherSubject = require('../models/TeacherSubject');
 const Attendance = require('../models/Attendance');
 const Student = require('../models/Student');
 const Setting = require('../models/Setting');
+const Batch = require('../models/Batch');
+const User = require('../models/User');
+const Department = require('../models/Department');
 const { calculateAttendancePercentage, normalizeDate } = require('../utils/helpers');
 const { calculateDefaulters } = require('../utils/defaulterAggregation');
 const { isHoliday } = require('../utils/isHoliday');
@@ -17,15 +20,30 @@ const getTodayTimetable = async (req, res) => {
     const dayOfWeek = now.getDay();
     const todayNormalized = normalizeDate(now);
 
-    const slots = await PeriodSlot.find({ teacher: teacherId, dayOfWeek, isRecess: { $ne: true } })
+    const rawSlots = await PeriodSlot.find({ teacher: teacherId, dayOfWeek, isRecess: { $ne: true } })
       .populate({
         path: 'section',
-        select: 'name semester year department',
-        populate: { path: 'department', select: 'name code course' },
+        select: 'name semester year department batch',
+        populate: [
+          { path: 'department', select: 'name code course' },
+          { path: 'batch', select: 'name startYear endYear isActive' },
+        ],
       })
+      .populate('batch', 'name startYear endYear isActive')
       .populate('subject', 'name code credits')
       .populate('session', 'year semesterLabel isActive')
       .sort({ periodNumber: 1 });
+
+    // Filter out inactive/archived batches for daily live attendance
+    const slots = rawSlots.filter((slot) => {
+      if (slot.section?.batch && slot.section.batch.isActive === false) {
+        return false;
+      }
+      return true;
+    });
+
+    const settings = await Setting.findOne();
+    const editWindowHours = settings?.allowTeacherEditHours ?? settings?.editWindowHours ?? 24;
 
     const enrichedSlots = await Promise.all(
       slots.map(async (slot) => {
@@ -40,12 +58,10 @@ const getTodayTimetable = async (req, res) => {
           isActive: true,
         });
 
-        const settings = await Setting.findOne();
-        const editWindowHours = settings?.editWindowHours || 24;
-
         let canEdit = false;
         if (attendance) {
-          const hoursElapsed = (Date.now() - new Date(attendance.markedAt).getTime()) / (1000 * 60 * 60);
+          const baseTime = attendance.markedAt || attendance.createdAt || attendance.date;
+          const hoursElapsed = (Date.now() - new Date(baseTime).getTime()) / (1000 * 60 * 60);
           canEdit = hoursElapsed <= editWindowHours;
         }
 
@@ -89,15 +105,26 @@ const getTodayTimetable = async (req, res) => {
 const getWeeklyTimetable = async (req, res) => {
   try {
     const teacherId = req.user._id;
-    const slots = await PeriodSlot.find({ teacher: teacherId })
+    const rawSlots = await PeriodSlot.find({ teacher: teacherId })
       .populate({
         path: 'section',
-        select: 'name semester year department',
-        populate: { path: 'department', select: 'name code' },
+        select: 'name semester year department batch',
+        populate: [
+          { path: 'department', select: 'name code' },
+          { path: 'batch', select: 'name startYear endYear isActive' },
+        ],
       })
+      .populate('batch', 'name startYear endYear isActive')
       .populate('subject', 'name code')
       .populate('session', 'year semesterLabel')
       .sort({ dayOfWeek: 1, periodNumber: 1 });
+
+    const slots = rawSlots.filter((slot) => {
+      if (slot.section?.batch && slot.section.batch.isActive === false) {
+        return false;
+      }
+      return true;
+    });
 
     return res.status(200).json(slots);
   } catch (error) {
@@ -136,9 +163,13 @@ const getPeriodRoster = async (req, res) => {
     const slot = await PeriodSlot.findById(periodSlotId)
       .populate({
         path: 'section',
-        select: 'name semester year department',
-        populate: { path: 'department', select: 'name code course' },
+        select: 'name semester year department batch',
+        populate: [
+          { path: 'department', select: 'name code course' },
+          { path: 'batch', select: 'name startYear endYear isActive' },
+        ],
       })
+      .populate('batch', 'name startYear endYear isActive')
       .populate('subject', 'name code')
       .populate('session', 'year semesterLabel');
 
@@ -164,11 +195,12 @@ const getPeriodRoster = async (req, res) => {
     });
 
     const settings = await Setting.findOne();
-    const editWindowHours = settings?.editWindowHours || 24;
+    const editWindowHours = settings?.allowTeacherEditHours ?? settings?.editWindowHours ?? 24;
 
     let canEdit = true;
     if (existingAttendance) {
-      const hoursElapsed = (Date.now() - new Date(existingAttendance.markedAt).getTime()) / (1000 * 60 * 60);
+      const baseTime = existingAttendance.markedAt || existingAttendance.createdAt || existingAttendance.date;
+      const hoursElapsed = (Date.now() - new Date(baseTime).getTime()) / (1000 * 60 * 60);
       canEdit = hoursElapsed <= editWindowHours;
     }
 
@@ -202,11 +234,18 @@ const markAttendance = async (req, res) => {
 
     const slot = await PeriodSlot.findById(periodSlotId).populate({
       path: 'section',
-      select: 'department',
-      populate: { path: 'department', select: 'course' },
+      select: 'department batch',
+      populate: [
+        { path: 'department', select: 'course' },
+        { path: 'batch', select: 'name isActive' },
+      ],
     });
     if (!slot) {
       return res.status(404).json({ message: 'Period slot not found.' });
+    }
+
+    if (slot.section?.batch && slot.section.batch.isActive === false) {
+      return res.status(400).json({ message: `Cannot mark attendance for archived or inactive batch '${slot.section.batch.name}'.` });
     }
 
     if (slot.teacher.toString() !== teacherId.toString()) {
@@ -306,12 +345,13 @@ const updateAttendance = async (req, res) => {
     }
 
     const settings = await Setting.findOne();
-    const editWindowHours = settings?.editWindowHours || 24;
-    const hoursElapsed = (Date.now() - new Date(attendance.markedAt).getTime()) / (1000 * 60 * 60);
+    const editWindowHours = settings?.allowTeacherEditHours ?? settings?.editWindowHours ?? 24;
+    const baseTime = attendance.markedAt || attendance.createdAt || attendance.date;
+    const hoursElapsed = (Date.now() - new Date(baseTime).getTime()) / (1000 * 60 * 60);
 
     if (hoursElapsed > editWindowHours) {
       return res.status(403).json({
-        message: `Attendance edit window of ${editWindowHours} hours has expired. Marked at ${new Date(attendance.markedAt).toLocaleString()}.`,
+        message: `Edit window of ${editWindowHours} hours has expired. Marked at ${new Date(baseTime).toLocaleString()}.`,
       });
     }
 
@@ -365,6 +405,8 @@ const getMyReports = async (req, res) => {
         .sort({ date: -1 }),
       Setting.findOne(),
     ]);
+
+    const thresholdPercent = settings?.attendanceThresholdPercent ?? settings?.attendanceThreshold ?? 75;
 
     const filteredAssignments = year
       ? assignments.filter((a) => Number(a.section?.year) === Number(year))
@@ -425,7 +467,7 @@ const getMyReports = async (req, res) => {
         totalPresent,
         totalLate,
         totalAbsent,
-        thresholdPercent: settings?.attendanceThresholdPercent || 75,
+        thresholdPercent,
       },
       breakdown,
       recentLogs: filteredAttendances.slice(0, 15),
@@ -440,33 +482,37 @@ const getMyReports = async (req, res) => {
 const getTeacherDefaulters = async (req, res) => {
   try {
     const teacherId = req.user._id;
-    const { subject, month } = req.query;
+    const { subject, month, startDate, endDate, batch, batchId } = req.query;
 
-    if (!subject) {
-      return res.status(400).json({ message: 'Subject query parameter is required.' });
-    }
-    if (!month) {
-      return res.status(400).json({ message: 'Month query parameter in YYYY-MM format is required.' });
+    if (!subject && !batch && !batchId) {
+      return res.status(400).json({ message: 'Subject or Batch query parameter is required.' });
     }
 
-    const assignment = await TeacherSubject.findOne({ teacher: teacherId, subject });
-    if (!assignment) {
-      return res.status(403).json({ message: 'Forbidden. You are not assigned to teach this subject.' });
+    let sectionIds = [];
+    if (subject) {
+      const assignment = await TeacherSubject.findOne({ teacher: teacherId, subject });
+      if (!assignment) {
+        return res.status(403).json({ message: 'Forbidden. You are not assigned to teach this subject.' });
+      }
+      const teacherAssignments = await TeacherSubject.find({ teacher: teacherId, subject }).select('section');
+      sectionIds = teacherAssignments.map((a) => a.section);
     }
-
-    const teacherAssignments = await TeacherSubject.find({ teacher: teacherId, subject }).select('section');
-    const sectionIds = teacherAssignments.map((a) => a.section);
 
     const data = await calculateDefaulters({
       month,
-      subjectId: subject,
-      mode: 'subject',
+      startDate,
+      endDate,
+      subjectId: subject || null,
+      batchId: batchId || batch || null,
+      mode: subject ? 'subject' : 'overall',
     });
 
-    const studentsInSections = await Student.find({ section: { $in: sectionIds } }).select('_id');
-    const studentIdSet = new Set(studentsInSections.map((s) => s._id.toString()));
+    if (sectionIds.length > 0) {
+      const studentsInSections = await Student.find({ section: { $in: sectionIds } }).select('_id');
+      const studentIdSet = new Set(studentsInSections.map((s) => s._id.toString()));
+      data.defaulters = data.defaulters.filter((d) => studentIdSet.has(d.studentId));
+    }
 
-    data.defaulters = data.defaulters.filter((d) => studentIdSet.has(d.studentId));
     data.stats.totalDefaulters = data.defaulters.length;
     if (data.defaulters.length > 0) {
       const sumPct = data.defaulters.reduce((acc, curr) => acc + curr.percentage, 0);
@@ -493,7 +539,7 @@ const exportTeacherReportsPdf = async (req, res) => {
     const teacherId = req.user._id;
     const { year } = req.query;
 
-    const [assignments, attendances] = await Promise.all([
+    const [assignments, attendances, settings] = await Promise.all([
       TeacherSubject.find({ teacher: teacherId })
         .populate('subject', 'name code semester credits')
         .populate({
@@ -511,7 +557,10 @@ const exportTeacherReportsPdf = async (req, res) => {
         })
         .populate('records.student', 'name rollNumber year')
         .sort({ date: -1 }),
+      Setting.findOne(),
     ]);
+
+    const institutionName = settings?.institutionName || 'AttendEdge Institute of Technology';
 
     const filteredAssignments = year
       ? assignments.filter((a) => Number(a.section?.year) === Number(year))
@@ -564,6 +613,7 @@ const exportTeacherReportsPdf = async (req, res) => {
     const html = buildGenericTablePdfHtml({
       title: 'Teaching Performance & Subject Attendance Report',
       subtitle: `Classroom attendance summary across assigned subjects for ${teacher.name}`,
+      institutionName,
       filters: {
         Faculty: `${teacher.name} (${teacher.employeeId || teacher.email})`,
         'Total Subjects/Sections': rows.length,
@@ -600,15 +650,20 @@ const exportTeacherTimetablePdf = async (req, res) => {
     const teacher = req.user;
     const teacherId = req.user._id;
 
-    const slots = await PeriodSlot.find({ teacher: teacherId, isRecess: { $ne: true } })
-      .populate({
-        path: 'section',
-        select: 'name semester year department',
-        populate: { path: 'department', select: 'name code' },
-      })
-      .populate('subject', 'name code')
-      .populate('session', 'year semesterLabel')
-      .sort({ dayOfWeek: 1, periodNumber: 1 });
+    const [slots, settings] = await Promise.all([
+      PeriodSlot.find({ teacher: teacherId, isRecess: { $ne: true } })
+        .populate({
+          path: 'section',
+          select: 'name semester year department',
+          populate: { path: 'department', select: 'name code' },
+        })
+        .populate('subject', 'name code')
+        .populate('session', 'year semesterLabel')
+        .sort({ dayOfWeek: 1, periodNumber: 1 }),
+      Setting.findOne(),
+    ]);
+
+    const institutionName = settings?.institutionName || 'AttendEdge Institute of Technology';
 
     const INT_TO_DAY_NAME = { 1: 'Monday', 2: 'Tuesday', 3: 'Wednesday', 4: 'Thursday', 5: 'Friday', 6: 'Saturday', 0: 'Sunday' };
 
@@ -624,6 +679,7 @@ const exportTeacherTimetablePdf = async (req, res) => {
     const html = buildGenericTablePdfHtml({
       title: 'Weekly Teaching Schedule & Timetable',
       subtitle: `Personal weekly classroom lecture schedule for ${teacher.name}`,
+      institutionName,
       filters: {
         Faculty: `${teacher.name} (${teacher.employeeId || teacher.email})`,
         'Scheduled Lectures / Week': slots.length,
@@ -654,11 +710,11 @@ const exportTeacherDefaultersPdf = async (req, res) => {
   try {
     const teacher = req.user;
     const teacherId = req.user._id;
-    let { subject, month } = req.query;
+    let { subject, month, startDate, endDate, batch, batchId } = req.query;
 
-    if (!month) {
-      month = new Date().toISOString().slice(0, 7);
-    }
+    const settings = await Setting.findOne();
+    const institutionName = settings?.institutionName || settings?.collegeName || 'Everest College';
+    const threshold = settings?.attendanceThresholdPercent ?? settings?.attendanceThreshold ?? 75;
 
     let assignment = null;
     if (subject) {
@@ -673,68 +729,64 @@ const exportTeacherDefaultersPdf = async (req, res) => {
       }
     }
 
-    if (!assignment || !subject) {
-      // Return empty report gracefully if teacher has no assigned subjects yet
-      const html = buildGenericTablePdfHtml({
-        title: `Subject Attendance Defaulters · ${month}`,
-        subtitle: `No assigned subjects found for ${teacher.name}`,
-        filters: {
-          Faculty: `${teacher.name} (${teacher.employeeId || teacher.email})`,
-          Month: month,
-        },
-        columns: [
-          { header: 'Roll No', key: 'rollNumber', align: 'center' },
-          { header: 'Student Name', key: 'name' },
-          { header: 'Section', key: 'section', align: 'center' },
-          { header: 'Attended / Total', key: 'attended', align: 'center' },
-          { header: 'Attendance %', key: 'percentage', align: 'center' },
-        ],
-        rows: [],
-      });
-      const pdfBuffer = await generatePdf(html);
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="defaulters_${month}.pdf"`);
-      return res.status(200).send(pdfBuffer);
+    let sectionIds = [];
+    if (subject) {
+      const teacherAssignments = await TeacherSubject.find({ teacher: teacherId, subject }).select('section');
+      sectionIds = teacherAssignments.map((a) => a.section);
     }
-
-    const teacherAssignments = await TeacherSubject.find({ teacher: teacherId, subject }).select('section');
-    const sectionIds = teacherAssignments.map((a) => a.section);
 
     const data = await calculateDefaulters({
       month,
-      subjectId: subject,
-      mode: 'subject',
+      startDate,
+      endDate,
+      subjectId: subject || null,
+      batchId: batchId || batch || null,
+      mode: subject ? 'subject' : 'overall',
+      threshold,
     });
 
-    const studentsInSections = await Student.find({ section: { $in: sectionIds } }).select('_id');
-    const studentIdSet = new Set(studentsInSections.map((s) => s._id.toString()));
+    let filteredDefaulters = data.defaulters || [];
+    if (sectionIds.length > 0) {
+      const studentsInSections = await Student.find({ section: { $in: sectionIds } }).select('_id');
+      const studentIdSet = new Set(studentsInSections.map((s) => s._id.toString()));
+      filteredDefaulters = filteredDefaulters.filter((d) => studentIdSet.has(d.studentId));
+    }
 
-    const filteredDefaulters = (data.defaulters || []).filter((d) => studentIdSet.has(d.studentId));
+    let batchLabel = '';
+    if (batch || batchId) {
+      const bDoc = await Batch.findById(batchId || batch);
+      if (bDoc) batchLabel = bDoc.name;
+    }
 
     const rows = filteredDefaulters.map((d) => ({
       rollNumber: d.rollNumber || 'N/A',
       name: d.name || 'N/A',
       section: d.section || d.sectionName || 'N/A',
+      batch: d.batchName || batchLabel || '—',
       attended: `${d.present != null ? d.present : (d.attended != null ? d.attended : 'N/A')} / ${d.totalPeriods != null ? d.totalPeriods : 'N/A'}`,
       percentage: `${d.percentage != null && !isNaN(d.percentage) ? d.percentage : 'N/A'}%`,
     }));
 
-    const subjectName = assignment.subject?.name || 'Subject';
-    const subjectCode = assignment.subject?.code || '';
+    const subjectName = assignment?.subject?.name || 'Class Subject';
+    const subjectCode = assignment?.subject?.code || '';
+    const dateFilterLabel = data.rangeLabel || (data.startDate && data.endDate ? `${data.startDate} to ${data.endDate}` : data.month || 'Current Period');
 
     const html = buildGenericTablePdfHtml({
-      title: `Subject Attendance Defaulters · ${month}`,
-      subtitle: `Students falling below mandatory attendance threshold (${data.thresholdPercent || 75}%) in ${subjectName} (${subjectCode})`,
+      title: `Subject Attendance Defaulters · ${dateFilterLabel}`,
+      subtitle: `Students falling below mandatory attendance threshold (${data.thresholdPercent || threshold}%) in ${subjectName} (${subjectCode})`,
+      institutionName,
       filters: {
         Faculty: `${teacher.name} (${teacher.employeeId || teacher.email})`,
         Subject: `${subjectName} (${subjectCode})`,
-        Month: month,
-        Threshold: `${data.thresholdPercent || 75}%`,
+        'Date Range': dateFilterLabel,
+        ...(batchLabel ? { Batch: batchLabel } : {}),
+        Threshold: `${data.thresholdPercent || threshold}%`,
       },
       columns: [
         { header: 'Roll No', key: 'rollNumber', align: 'center' },
         { header: 'Student Name', key: 'name' },
         { header: 'Section', key: 'section', align: 'center' },
+        { header: 'Batch', key: 'batch', align: 'center' },
         { header: 'Attended / Total', key: 'attended', align: 'center' },
         {
           header: 'Attendance %',
@@ -747,11 +799,44 @@ const exportTeacherDefaultersPdf = async (req, res) => {
 
     const pdfBuffer = await generatePdf(html);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="defaulters_${subjectCode}_${month}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="defaulters_${subjectCode || 'report'}.pdf"`);
     return res.status(200).send(pdfBuffer);
   } catch (err) {
     console.error('exportTeacherDefaultersPdf error:', err);
     return res.status(500).json({ message: 'Error generating teacher defaulters PDF', error: err.message });
+  }
+};
+
+// GET /api/teacher/batches
+const getMyBatches = async (req, res) => {
+  try {
+    const teacherId = req.user._id;
+    const user = await User.findById(teacherId)
+      .populate({
+        path: 'assignedBatches',
+        populate: { path: 'course', select: 'name code durationYears' },
+      })
+      .populate({
+        path: 'department',
+        populate: { path: 'course', select: 'name code durationYears' },
+      });
+
+    if (user && user.assignedBatches && user.assignedBatches.length > 0) {
+      return res.status(200).json(user.assignedBatches);
+    }
+
+    if (user?.department?.course) {
+      const courseId = user.department.course._id || user.department.course;
+      const batches = await Batch.find({ course: courseId, isActive: true })
+        .populate('course', 'name code durationYears')
+        .sort({ startYear: -1 });
+      return res.status(200).json(batches);
+    }
+
+    return res.status(200).json([]);
+  } catch (error) {
+    console.error('getMyBatches error:', error);
+    return res.status(500).json({ message: 'Error fetching teacher batches', error: error.message });
   }
 };
 
@@ -764,6 +849,7 @@ module.exports = {
   updateAttendance,
   getMyReports,
   getTeacherDefaulters,
+  getMyBatches,
   exportTeacherReportsPdf,
   exportTeacherTimetablePdf,
   exportTeacherDefaultersPdf,

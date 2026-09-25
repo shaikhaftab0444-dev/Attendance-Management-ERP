@@ -119,20 +119,20 @@ function buildGenericTablePdfHtml({
       padding-bottom: 12px;
       margin-bottom: 16px;
     }
-    .brand-title {
+    .institution-header {
       font-size: 18px;
       font-weight: 800;
       color: #0f172a;
       letter-spacing: -0.02em;
+      line-height: 1.25;
     }
-    .brand-title span {
-      color: #2563eb;
-    }
-    .institution-name {
-      font-size: 11px;
+    .sub-brand {
+      font-size: 10px;
       font-weight: 600;
-      color: #64748b;
-      margin-top: 2px;
+      color: #2563eb;
+      margin-top: 3px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
     }
     .doc-meta {
       text-align: right;
@@ -231,8 +231,8 @@ function buildGenericTablePdfHtml({
 <body>
   <div class="header-container">
     <div>
-      <div class="brand-title">Attend<span>Edge</span></div>
-      <div class="institution-name">${escapeHtml(institutionName)}</div>
+      <div class="institution-header">${escapeHtml(institutionName || 'Everest College')}</div>
+      <div class="sub-brand">${escapeHtml(institutionName || 'Everest College')} · OFFICIAL DOCUMENT</div>
     </div>
     <div class="doc-meta">
       <div><strong>Generated On:</strong> ${generatedAt}</div>
@@ -255,7 +255,7 @@ function buildGenericTablePdfHtml({
   </table>
 
   <div class="footer">
-    <div>AttendEdge Academic Management System · Confidential</div>
+    <div>${escapeHtml(institutionName || 'Everest College')} · Confidential</div>
     <div>Official Institutional Record</div>
   </div>
 </body>
@@ -379,16 +379,20 @@ function buildTimetablePdfHtml({
       padding-bottom: 10px;
       margin-bottom: 12px;
     }
-    .brand-title {
+    .institution-header {
       font-size: 18px;
       font-weight: 800;
       color: #0f172a;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
     }
-    .brand-title span { color: #2563eb; }
-    .institution-name {
+    .timetable-subhead {
       font-size: 11px;
-      font-weight: 600;
-      color: #64748b;
+      font-weight: 700;
+      color: #2563eb;
+      margin-top: 3px;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
     }
     .meta-box {
       text-align: right;
@@ -536,8 +540,8 @@ function buildTimetablePdfHtml({
 <body>
   <div class="header-bar">
     <div>
-      <div class="brand-title">Attend<span>Edge</span> Timetable</div>
-      <div class="institution-name">${escapeHtml(institutionName)}</div>
+      <div class="institution-header">${escapeHtml(institutionName || 'Everest College')}</div>
+      <div class="timetable-subhead">${escapeHtml(institutionName || 'Everest College')} · OFFICIAL TIMETABLE SCHEDULE</div>
     </div>
     <div class="meta-box">
       <div><strong>Generated:</strong> ${generatedAt}</div>
@@ -573,7 +577,7 @@ function buildTimetablePdfHtml({
   </table>
 
   <div class="footer">
-    <div>AttendEdge Timetable System · Master Schedule</div>
+    <div>${escapeHtml(institutionName || 'Everest College')} · Master Timetable Schedule</div>
     <div>Valid for the Current Academic Semester</div>
   </div>
 </body>

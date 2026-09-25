@@ -84,6 +84,7 @@ export const TeacherTimetable: React.FC = () => {
                 <div className="space-y-2.5">
                   {daySlots.map((slot) => {
                     const deptName = slot.section?.department?.code || slot.section?.department?.name || 'Dept';
+                    const batchName = (slot.batch as any)?.name || (slot.section?.batch as any)?.name || (slot.subject?.batch as any)?.name;
                     return (
                       <div
                         key={slot._id}
@@ -110,6 +111,11 @@ export const TeacherTimetable: React.FC = () => {
                             <Layers className="w-2.5 h-2.5 text-slate-400" />
                             {slot.section?.name} · Year {slot.section?.year || 1}
                           </span>
+                          {batchName && (
+                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200/80 flex items-center gap-1 font-mono">
+                              Batch {batchName}
+                            </span>
+                          )}
                         </div>
                       </div>
                     );

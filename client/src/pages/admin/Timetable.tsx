@@ -14,9 +14,10 @@ import {
   CheckCircle2,
   Sparkles,
   UserCheck,
+  Users,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Department, Section, Subject, User as UserType, AcademicSession, PeriodSlot, Course, PeriodTemplate } from '../../types';
+import { Department, Section, Subject, User as UserType, AcademicSession, PeriodSlot, Course, PeriodTemplate, Batch } from '../../types';
 import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
 import { useToast } from '../../context/ToastContext';
@@ -52,6 +53,8 @@ export const AdminTimetable: React.FC = () => {
   const [selectedYear, setSelectedYear] = useState<number>(1);
   const [allSections, setAllSections] = useState<Section[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>('');
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [selectedBatch, setSelectedBatch] = useState<string>('');
 
   // Loaded Data
   const [slots, setSlots] = useState<PeriodSlot[]>([]);
@@ -96,20 +99,22 @@ export const AdminTimetable: React.FC = () => {
 
   const RECESS_PRESETS = ['Lunch Break', 'Short Recess', 'Tea Break', 'Interval'];
 
-  // 1. Initial Load: Courses, Departments, Sections, Sessions
+  // 1. Initial Load: Courses, Departments, Sections, Sessions, Batches
   const fetchInitialData = async () => {
     try {
-      const [crsRes, deptRes, secRes, sesRes] = await Promise.all([
+      const [crsRes, deptRes, secRes, sesRes, batchRes] = await Promise.all([
         api.get('/admin/courses'),
         api.get('/admin/departments'),
         api.get('/admin/sections'),
         api.get('/admin/sessions'),
+        api.get('/admin/batches'),
       ]);
 
       setCourses(crsRes.data);
       setDepartments(deptRes.data);
       setAllSections(secRes.data);
       setSessions(sesRes.data);
+      setBatches(batchRes.data);
 
       if (crsRes.data.length > 0) {
         setSelectedCourse(crsRes.data[0]._id);
@@ -184,6 +189,15 @@ export const AdminTimetable: React.FC = () => {
   const maxYearsForCourse = selectedCourseObj ? selectedCourseObj.durationYears : 4;
   const courseYearsArray = Array.from({ length: maxYearsForCourse }, (_, i) => i + 1);
 
+  // Filter batches by selectedCourse
+  const filteredBatches = useMemo(() => {
+    if (!selectedCourse) return batches;
+    return batches.filter((b) => {
+      const cId = typeof b.course === 'object' && b.course ? b.course._id : b.course;
+      return cId === selectedCourse;
+    });
+  }, [batches, selectedCourse]);
+
   // Filter sections by department and year
   const filteredSections = useMemo(() => {
     return allSections.filter((s) => {
@@ -207,6 +221,25 @@ export const AdminTimetable: React.FC = () => {
     }
   }, [filteredSections]);
 
+  // Keep selectedBatch in sync with selectedSection and course
+  useEffect(() => {
+    if (selectedSection) {
+      const sec = allSections.find((s) => s._id === selectedSection);
+      const secBatchId = (sec?.batch as any)?._id || sec?.batch;
+      if (secBatchId) {
+        setSelectedBatch(secBatchId.toString());
+      } else if (filteredBatches.length > 0) {
+        if (!selectedBatch || !filteredBatches.some((b) => b._id === selectedBatch)) {
+          setSelectedBatch(filteredBatches[0]._id);
+        }
+      }
+    } else if (filteredBatches.length > 0) {
+      if (!selectedBatch || !filteredBatches.some((b) => b._id === selectedBatch)) {
+        setSelectedBatch(filteredBatches[0]._id);
+      }
+    }
+  }, [selectedSection, allSections, filteredBatches]);
+
   // 2. Fetch Slots, Templates, Inconsistencies & Department Subjects when section changes
   const fetchSectionTimetable = async () => {
     if (!selectedSection) {
@@ -219,9 +252,13 @@ export const AdminTimetable: React.FC = () => {
 
     try {
       setIsLoading(true);
+      const slotParams: any = { section: selectedSection };
+      if (selectedBatch) {
+        slotParams.batch = selectedBatch;
+      }
       const [slotRes, subRes, tplRes, incRes] = await Promise.all([
-        api.get('/admin/period-slots', { params: { section: selectedSection } }),
-        api.get('/admin/subjects', { params: { department: selectedDept } }),
+        api.get('/admin/period-slots', { params: slotParams }),
+        api.get('/admin/subjects', { params: { department: selectedDept, ...(selectedBatch ? { batch: selectedBatch } : {}) } }),
         api.get('/admin/period-templates', { params: { section: selectedSection } }),
         api.get('/admin/period-slots/inconsistencies', { params: { section: selectedSection } }),
       ]);
@@ -238,7 +275,7 @@ export const AdminTimetable: React.FC = () => {
 
   useEffect(() => {
     fetchSectionTimetable();
-  }, [selectedSection, selectedDept]);
+  }, [selectedSection, selectedDept, selectedBatch]);
 
   // Template Map: periodNumber -> PeriodTemplate
   const templateMap = useMemo(() => {
@@ -394,6 +431,7 @@ export const AdminTimetable: React.FC = () => {
     const secDoc = allSections.find((s) => s._id === selectedSection);
     const activeSession = sessions.find((s) => s.isActive) || sessions[0];
     const sessionId = (secDoc?.session as any)?._id || secDoc?.session || activeSession?._id;
+    const secBatchId = selectedBatch || (secDoc?.batch as any)?._id || secDoc?.batch || null;
 
     const payload: any = {
       section: selectedSection,
@@ -402,6 +440,7 @@ export const AdminTimetable: React.FC = () => {
       startTime: modalStartTime,
       endTime: modalEndTime,
       session: sessionId,
+      batch: secBatchId,
       isRecess: modalIsRecess,
       recessLabel: modalIsRecess ? modalRecessLabel.trim() : '',
       subject: modalIsRecess ? null : modalSubject,
@@ -468,12 +507,13 @@ export const AdminTimetable: React.FC = () => {
             department: selectedDept,
             year: selectedYear,
             section: selectedSection,
+            batch: selectedBatch,
           }}
         />
       </div>
 
-      {/* Cascading Filter Bar: Course -> Department -> Year -> Section */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+      {/* Cascading Filter Bar: Course -> Department -> Year -> Section -> Batch */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
         {/* Course Filter */}
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -552,6 +592,26 @@ export const AdminTimetable: React.FC = () => {
             ) : (
               <option value="">No sections found in this year</option>
             )}
+          </select>
+        </div>
+
+        {/* Batch Cohort Filter */}
+        <div>
+          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+            <Users className="w-3.5 h-3.5 text-purple-600" />
+            <span>5. BATCH COHORT *</span>
+          </label>
+          <select
+            value={selectedBatch}
+            onChange={(e) => setSelectedBatch(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
+          >
+            <option value="">-- Select Batch Cohort --</option>
+            {filteredBatches.map((b) => (
+              <option key={b._id} value={b._id}>
+                {b.name} ({b.startYear}-{b.endYear})
+              </option>
+            ))}
           </select>
         </div>
       </div>

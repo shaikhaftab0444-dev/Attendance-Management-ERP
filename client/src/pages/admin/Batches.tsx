@@ -9,9 +9,10 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
+  UserCheck,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Batch, Course } from '../../types';
+import { Batch, Course, User } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -21,6 +22,7 @@ import { useToast } from '../../context/ToastContext';
 export const AdminBatches: React.FC = () => {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
+  const [teachers, setTeachers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filters
@@ -35,6 +37,7 @@ export const AdminBatches: React.FC = () => {
   const [endYear, setEndYear] = useState<number>(new Date().getFullYear() + 4);
   const [name, setName] = useState('');
   const [isManualName, setIsManualName] = useState(false);
+  const [assignedTeachers, setAssignedTeachers] = useState<string[]>([]);
   const [isActive, setIsActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -51,12 +54,14 @@ export const AdminBatches: React.FC = () => {
       if (courseFilter) params.course = courseFilter;
       if (statusFilter !== 'all') params.isActive = statusFilter === 'active';
 
-      const [bRes, cRes] = await Promise.all([
+      const [bRes, cRes, tRes] = await Promise.all([
         api.get('/admin/batches', { params }),
         api.get('/admin/courses'),
+        api.get('/admin/users', { params: { role: 'teacher' } }),
       ]);
       setBatches(bRes.data);
       setCourses(cRes.data);
+      setTeachers(tRes.data);
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching batches', 'error');
     } finally {
@@ -102,6 +107,7 @@ export const AdminBatches: React.FC = () => {
     setEndYear(computedEnd);
     setName(`${currentYr}-${computedEnd}`);
     setIsManualName(false);
+    setAssignedTeachers([]);
     setIsActive(true);
     setIsModalOpen(true);
   };
@@ -114,6 +120,9 @@ export const AdminBatches: React.FC = () => {
     setEndYear(batch.endYear);
     setName(batch.name);
     setIsManualName(true);
+    setAssignedTeachers(
+      (batch.assignedTeachers || []).map((t: any) => (typeof t === 'object' && t ? t._id : t))
+    );
     setIsActive(batch.isActive);
     setIsModalOpen(true);
   };
@@ -138,6 +147,7 @@ export const AdminBatches: React.FC = () => {
           startYear: Number(startYear),
           endYear: Number(endYear),
           name: name.trim(),
+          assignedTeachers,
           isActive,
         });
         showToast('Batch updated successfully', 'success');
@@ -147,6 +157,7 @@ export const AdminBatches: React.FC = () => {
           startYear: Number(startYear),
           endYear: Number(endYear),
           name: name.trim(),
+          assignedTeachers,
           isActive,
         });
         showToast('Batch created successfully', 'success');
@@ -215,6 +226,33 @@ export const AdminBatches: React.FC = () => {
           <span>{row.studentCount || 0} Students</span>
         </span>
       ),
+    },
+    {
+      header: 'Mapped Faculty & Teachers',
+      render: (row) => {
+        const assigned = row.assignedTeachers || [];
+        return (
+          <div className="space-y-1 py-0.5 min-w-[160px]">
+            {assigned.length > 0 ? (
+              <div className="flex items-center gap-1 flex-wrap">
+                {assigned.map((t: any) => {
+                  const tName = typeof t === 'object' && t ? t.name : t;
+                  return (
+                    <span
+                      key={typeof t === 'object' ? t._id : t}
+                      className="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 font-medium"
+                    >
+                      {tName}
+                    </span>
+                  );
+                })}
+              </div>
+            ) : (
+              <span className="text-xs text-slate-400 italic">No assigned faculty</span>
+            )}
+          </div>
+        );
+      },
     },
     {
       header: 'Status',
@@ -422,6 +460,53 @@ export const AdminBatches: React.FC = () => {
               required
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 font-mono font-bold focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
             />
+          </div>
+
+          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/80 space-y-3.5">
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Mapped Subject Teachers</span>
+                </label>
+                <span className="text-[11px] text-slate-400">
+                  {assignedTeachers.length} assigned
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap max-h-32 overflow-y-auto p-2 bg-white rounded-lg border border-slate-200">
+                {teachers
+                  .filter((t) => {
+                    if (!selectedCourseId) return true;
+                    const cId = typeof t.department?.course === 'object' && t.department?.course ? t.department.course._id : t.department?.course;
+                    return !cId || cId === selectedCourseId;
+                  })
+                  .map((t) => {
+                    const isSelected = assignedTeachers.includes(t._id);
+                    const toggleTeacher = () => {
+                      if (isSelected) {
+                        setAssignedTeachers(assignedTeachers.filter((id) => id !== t._id));
+                      } else {
+                        setAssignedTeachers([...assignedTeachers, t._id]);
+                      }
+                    };
+                    return (
+                      <button
+                        key={t._id}
+                        type="button"
+                        onClick={toggleTeacher}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all flex items-center gap-1 select-none ${
+                          isSelected
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-300 font-semibold'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span>{isSelected ? '✓' : '+'}</span>
+                        <span>{t.name}</span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-2 pt-2">

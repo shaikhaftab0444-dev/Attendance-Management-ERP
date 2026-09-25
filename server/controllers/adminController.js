@@ -193,6 +193,7 @@ const exportCoursesCsv = async (req, res) => {
 
 const exportCoursesPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const courses = await Course.find().sort({ name: 1 });
     const courseIds = courses.map((c) => c._id);
     const deptCounts = await Department.aggregate([
@@ -210,6 +211,7 @@ const exportCoursesPdf = async (req, res) => {
     }));
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Course Programs Directory',
       subtitle: 'Complete list of active academic degree and diploma programs',
       columns: [
@@ -443,6 +445,7 @@ const exportDepartmentsCsv = async (req, res) => {
 
 const exportDepartmentsPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const departments = await Department.find().populate('course', 'name code').sort({ name: 1 });
     const rows = departments.map((d) => ({
       name: d.name,
@@ -451,6 +454,7 @@ const exportDepartmentsPdf = async (req, res) => {
     }));
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Academic Departments Directory',
       subtitle: 'Official list of departments and associated degree programs',
       columns: [
@@ -474,7 +478,7 @@ const exportDepartmentsPdf = async (req, res) => {
 // ==================== BATCHES ====================
 const createBatch = async (req, res) => {
   try {
-    const { name, course, startYear, endYear, isActive } = req.body;
+    const { name, course, startYear, endYear, isActive, assignedTeachers } = req.body;
     if (!course || !startYear) {
       return res.status(400).json({ message: 'Course and Start Year are required.' });
     }
@@ -491,15 +495,31 @@ const createBatch = async (req, res) => {
       return res.status(409).json({ message: `Batch '${batchName}' already exists for this course.` });
     }
 
+    const teacherIds = Array.isArray(assignedTeachers)
+      ? assignedTeachers.filter((t) => mongoose.Types.ObjectId.isValid(t))
+      : [];
+
     const batch = new Batch({
       name: batchName,
       course,
       startYear: sYear,
       endYear: eYear,
       isActive: isActive !== undefined ? isActive : true,
+      assignedTeachers: teacherIds,
     });
     await batch.save();
-    const populated = await Batch.findById(batch._id).populate('course', 'name code durationYears');
+
+    // Synchronize with Users
+    if (teacherIds.length > 0) {
+      await User.updateMany(
+        { _id: { $in: teacherIds } },
+        { $addToSet: { assignedBatches: batch._id, batches: batch._id } }
+      );
+    }
+
+    const populated = await Batch.findById(batch._id)
+      .populate('course', 'name code durationYears')
+      .populate('assignedTeachers', 'name email employeeId phone');
     return res.status(201).json(populated);
   } catch (error) {
     console.error('createBatch error:', error);
@@ -525,6 +545,7 @@ const getBatches = async (req, res) => {
 
     const batches = await Batch.find(filter)
       .populate('course', 'name code durationYears')
+      .populate('assignedTeachers', 'name email employeeId phone')
       .sort({ startYear: -1, name: 1 });
 
     const batchIds = batches.map((b) => b._id);
@@ -551,7 +572,7 @@ const getBatches = async (req, res) => {
 const updateBatch = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, course, startYear, endYear, isActive } = req.body;
+    const { name, course, startYear, endYear, isActive, assignedTeachers } = req.body;
 
     const batch = await Batch.findById(id);
     if (!batch) {
@@ -564,8 +585,35 @@ const updateBatch = async (req, res) => {
     if (name) batch.name = name.trim();
     if (isActive !== undefined) batch.isActive = isActive;
 
+    let newTeacherIds = null;
+    if (assignedTeachers !== undefined) {
+      newTeacherIds = Array.isArray(assignedTeachers)
+        ? assignedTeachers.filter((t) => mongoose.Types.ObjectId.isValid(t))
+        : [];
+      batch.assignedTeachers = newTeacherIds;
+    }
+
     await batch.save();
-    const populated = await Batch.findById(id).populate('course', 'name code durationYears');
+
+    // Sync with User model
+    if (newTeacherIds !== null) {
+      // Remove this batch from any users no longer assigned
+      await User.updateMany(
+        { assignedBatches: id, _id: { $nin: newTeacherIds } },
+        { $pull: { assignedBatches: id, batches: id } }
+      );
+      // Add this batch to newly assigned users
+      if (newTeacherIds.length > 0) {
+        await User.updateMany(
+          { _id: { $in: newTeacherIds } },
+          { $addToSet: { assignedBatches: id, batches: id } }
+        );
+      }
+    }
+
+    const populated = await Batch.findById(id)
+      .populate('course', 'name code durationYears')
+      .populate('assignedTeachers', 'name email employeeId phone');
     return res.status(200).json(populated);
   } catch (error) {
     console.error('updateBatch error:', error);
@@ -704,6 +752,7 @@ const importBatchesCsv = async (req, res) => {
 
 const exportBatchesPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const { course, isActive } = req.query;
     const filter = {};
     if (isActive !== undefined && isActive !== 'all') {
@@ -742,6 +791,7 @@ const exportBatchesPdf = async (req, res) => {
     }));
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Student Cohort Batches Master List',
       subtitle: 'Admission-year ranges and cohort progression tracking',
       filters: {
@@ -858,38 +908,21 @@ const createUser = async (req, res) => {
     let assignedCourse = null;
     let assignedTeachingYears = undefined;
 
+    let assignedBatchesIds = [];
+    if (Array.isArray(req.body.assignedBatches)) {
+      assignedBatchesIds = req.body.assignedBatches.filter((b) => mongoose.Types.ObjectId.isValid(b));
+    } else if (Array.isArray(req.body.batches)) {
+      assignedBatchesIds = req.body.batches.filter((b) => mongoose.Types.ObjectId.isValid(b));
+    }
+
     if (role === 'hod') {
-      if (!course) {
-        return res.status(400).json({ message: 'Course is required for HOD role.' });
+      if (assignedBatchesIds.length === 0) {
+        return res.status(400).json({ message: 'At least one Managed Batch is required for HOD role.' });
       }
-      const courseDoc = mongoose.Types.ObjectId.isValid(course)
-        ? await Course.findById(course)
-        : await Course.findOne({ code: course.toUpperCase().trim() });
-
-      if (!courseDoc) {
-        return res.status(400).json({ message: 'Selected Course for HOD not found.' });
-      }
-
-      const parsedYear = Number(year);
-      if (!parsedYear || parsedYear < 1) {
-        return res.status(400).json({ message: 'A valid Academic Year (1, 2, 3, etc.) is required for HOD role.' });
-      }
-
-      const existingHod = await User.findOne({
-        role: 'hod',
-        course: courseDoc._id,
-        year: parsedYear,
-        isActive: true,
-      });
-
-      if (existingHod) {
-        return res.status(409).json({
-          message: `${courseDoc.name} Year ${parsedYear} is already assigned to HOD '${existingHod.name}'.`,
-        });
-      }
-
-      assignedCourse = courseDoc._id;
-      assignedYear = parsedYear;
+      const firstBatch = await Batch.findById(assignedBatchesIds[0]).populate('course');
+      assignedCourse = firstBatch?.course?._id || firstBatch?.course || null;
+      assignedDept = null;
+      assignedYear = null;
     } else if (role === 'teacher') {
       if (!department) {
         return res.status(400).json({ message: 'Department is required for Teacher role.' });
@@ -922,6 +955,8 @@ const createUser = async (req, res) => {
       course: assignedCourse,
       year: assignedYear,
       teachingYears: role === 'teacher' ? assignedTeachingYears : undefined,
+      assignedBatches: ['teacher', 'hod'].includes(role) ? assignedBatchesIds : [],
+      batches: ['teacher', 'hod'].includes(role) ? assignedBatchesIds : [],
       employeeId: employeeId || '',
       phone: phone ? phone.trim() : '',
       isActive: true,
@@ -929,9 +964,22 @@ const createUser = async (req, res) => {
 
     await user.save();
 
-    const userObj = user.toObject();
-    delete userObj.passwordHash;
-    return res.status(201).json(userObj);
+    // Synchronize with Batches
+    if (role === 'teacher' && assignedBatchesIds.length > 0) {
+      await Batch.updateMany(
+        { _id: { $in: assignedBatchesIds } },
+        { $addToSet: { assignedTeachers: user._id } }
+      );
+    }
+
+    const populatedUser = await User.findById(user._id)
+      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
+      .populate('course', 'name code durationYears')
+      .populate('assignedBatches', 'name startYear endYear course isActive')
+      .populate('batches', 'name startYear endYear course isActive')
+      .select('-passwordHash');
+
+    return res.status(201).json(populatedUser);
   } catch (error) {
     console.error('createUser error:', error);
     return res.status(500).json({ message: 'Error creating user', error: error.message });
@@ -940,10 +988,11 @@ const createUser = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { role, department, year, course } = req.query;
+    const { role, department, year, course, batch } = req.query;
     const filter = {};
     if (role) filter.role = role;
     if (department) filter.department = department;
+    if (batch) filter.assignedBatches = batch;
 
     let courseDeptIds = [];
     if (course) {
@@ -1015,6 +1064,7 @@ const getUsers = async (req, res) => {
     const users = await User.find(filter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
       .populate('course', 'name code durationYears')
+      .populate('assignedBatches', 'name startYear endYear course isActive')
       .select('-passwordHash')
       .sort({ createdAt: -1 });
 
@@ -1167,7 +1217,8 @@ const getTeachersForCourse = async (req, res) => {
 
     const teachers = await User.find(teacherQuery)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .select('name email employeeId phone department teachingYears')
+      .populate('assignedBatches', 'name startYear endYear course isActive')
+      .select('name email employeeId phone department teachingYears assignedBatches')
       .sort({ name: 1 });
 
     return res.status(200).json(teachers);
@@ -1180,7 +1231,7 @@ const getTeachersForCourse = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, password, role, department, course, year, employeeId, phone, isActive, teachingYears } = req.body;
+    const { name, email, password, role, department, course, year, employeeId, phone, isActive, teachingYears, assignedBatches } = req.body;
 
     const user = await User.findById(id);
     if (!user) {
@@ -1190,42 +1241,24 @@ const updateUser = async (req, res) => {
     const targetRole = role || user.role;
 
     if (targetRole === 'hod') {
-      const targetCourseId = course || user.course;
-      if (!targetCourseId) {
-        return res.status(400).json({ message: 'Course is required for HOD role.' });
+      let validBatchIds = user.assignedBatches || user.batches || [];
+      if (assignedBatches !== undefined || req.body.batches !== undefined) {
+        const inputBatches = assignedBatches !== undefined ? assignedBatches : req.body.batches;
+        validBatchIds = Array.isArray(inputBatches)
+          ? inputBatches.filter((b) => mongoose.Types.ObjectId.isValid(b))
+          : [];
+      }
+      if (validBatchIds.length === 0) {
+        return res.status(400).json({ message: 'At least one Managed Batch is required for HOD role.' });
       }
 
-      const courseDoc = mongoose.Types.ObjectId.isValid(targetCourseId)
-        ? await Course.findById(targetCourseId)
-        : await Course.findOne({ code: targetCourseId.toString().toUpperCase().trim() });
-
-      if (!courseDoc) {
-        return res.status(400).json({ message: 'Selected Course not found.' });
-      }
-
-      const targetYear = year !== undefined ? Number(year) : user.year;
-      if (!targetYear || targetYear < 1) {
-        return res.status(400).json({ message: 'A valid Academic Year (1, 2, 3, etc.) is required for HOD role.' });
-      }
-
-      const conflict = await User.findOne({
-        _id: { $ne: id },
-        role: 'hod',
-        course: courseDoc._id,
-        year: targetYear,
-        isActive: true,
-      });
-
-      if (conflict) {
-        return res.status(409).json({
-          message: `${courseDoc.name} Year ${targetYear} is already assigned to HOD '${conflict.name}'.`,
-        });
-      }
-
-      user.course = courseDoc._id;
-      user.year = targetYear;
+      const firstBatch = await Batch.findById(validBatchIds[0]).populate('course');
+      user.course = firstBatch?.course?._id || firstBatch?.course || null;
+      user.year = null;
       user.department = null;
       user.teachingYears = undefined;
+      user.assignedBatches = validBatchIds;
+      user.batches = validBatchIds;
     } else if (targetRole === 'teacher') {
       if (department) user.department = department;
       user.course = null;
@@ -1241,11 +1274,34 @@ const updateUser = async (req, res) => {
         }
         user.teachingYears = Array.from(new Set(validYears)).sort((a, b) => a - b);
       }
+
+      if (assignedBatches !== undefined || req.body.batches !== undefined) {
+        const inputBatches = assignedBatches !== undefined ? assignedBatches : req.body.batches;
+        const validBatchIds = Array.isArray(inputBatches)
+          ? inputBatches.filter((b) => mongoose.Types.ObjectId.isValid(b))
+          : [];
+        user.assignedBatches = validBatchIds;
+        user.batches = validBatchIds;
+
+        // Synchronize with Batches
+        await Batch.updateMany(
+          { assignedTeachers: id, _id: { $nin: validBatchIds } },
+          { $pull: { assignedTeachers: id } }
+        );
+        if (validBatchIds.length > 0) {
+          await Batch.updateMany(
+            { _id: { $in: validBatchIds } },
+            { $addToSet: { assignedTeachers: id } }
+          );
+        }
+      }
     } else {
       user.department = null;
       user.course = null;
       user.year = null;
       user.teachingYears = undefined;
+      user.assignedBatches = [];
+      user.batches = [];
     }
 
     if (phone !== undefined && phone !== '' && !validateIndianPhone(phone)) {
@@ -1269,6 +1325,8 @@ const updateUser = async (req, res) => {
     const updatedUser = await User.findById(id)
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('course')
+      .populate('assignedBatches', 'name startYear endYear course isActive')
+      .populate('batches', 'name startYear endYear course isActive')
       .select('-passwordHash');
 
     return res.status(200).json(updatedUser);
@@ -1362,6 +1420,7 @@ const exportUsersCsv = async (req, res) => {
 
 const exportUsersPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const users = await User.find({ role: { $in: ['teacher', 'hod', 'admin'] } })
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('course')
@@ -1391,6 +1450,7 @@ const exportUsersPdf = async (req, res) => {
     });
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Faculty & Staff Directory',
       subtitle: 'Complete list of institutional administrators, HODs, and teaching faculty',
       columns: [
@@ -1662,8 +1722,8 @@ const createSession = async (req, res) => {
     }
 
     const session = new AcademicSession({
-      year,
-      semesterLabel,
+      year: year.trim(),
+      semesterLabel: semesterLabel.trim(),
       startDate: new Date(startDate),
       endDate: new Date(endDate),
       isActive: isActive !== undefined ? isActive : true,
@@ -1673,7 +1733,7 @@ const createSession = async (req, res) => {
     return res.status(201).json(session);
   } catch (error) {
     console.error('createSession error:', error);
-    return res.status(500).json({ message: 'Error creating academic session' });
+    return res.status(500).json({ message: 'Error creating academic session', error: error.message });
   }
 };
 
@@ -1683,7 +1743,64 @@ const getSessions = async (req, res) => {
     return res.status(200).json(sessions);
   } catch (error) {
     console.error('getSessions error:', error);
-    return res.status(500).json({ message: 'Error fetching sessions' });
+    return res.status(500).json({ message: 'Error fetching sessions', error: error.message });
+  }
+};
+
+const updateSession = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { year, semesterLabel, startDate, endDate, isActive } = req.body;
+
+    const session = await AcademicSession.findById(id);
+    if (!session) {
+      return res.status(404).json({ message: 'Academic session not found' });
+    }
+
+    if (isActive) {
+      await AcademicSession.updateMany({ _id: { $ne: id } }, { isActive: false });
+      session.isActive = true;
+    } else if (isActive === false) {
+      session.isActive = false;
+    }
+
+    if (year) session.year = year.trim();
+    if (semesterLabel) session.semesterLabel = semesterLabel.trim();
+    if (startDate) session.startDate = new Date(startDate);
+    if (endDate) session.endDate = new Date(endDate);
+
+    await session.save();
+    return res.status(200).json(session);
+  } catch (error) {
+    console.error('updateSession error:', error);
+    return res.status(500).json({ message: 'Error updating academic session', error: error.message });
+  }
+};
+
+const deleteSession = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const session = await AcademicSession.findById(id);
+    if (!session) {
+      return res.status(404).json({ message: 'Academic session not found' });
+    }
+
+    const [secCount, tsCount] = await Promise.all([
+      Section.countDocuments({ session: id }),
+      TeacherSubject.countDocuments({ session: id }),
+    ]);
+
+    if (secCount > 0 || tsCount > 0) {
+      return res.status(409).json({
+        message: `Cannot delete Academic Session '${session.year} - ${session.semesterLabel}' because ${secCount} class section(s) and ${tsCount} faculty allocation(s) are linked to it.`,
+      });
+    }
+
+    await AcademicSession.findByIdAndDelete(id);
+    return res.status(200).json({ message: 'Academic session deleted successfully' });
+  } catch (error) {
+    console.error('deleteSession error:', error);
+    return res.status(500).json({ message: 'Error deleting academic session', error: error.message });
   }
 };
 
@@ -1916,6 +2033,7 @@ const exportSectionsCsv = async (req, res) => {
 
 const exportSectionsPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const { course, department, year, batch } = req.query;
     const filter = {};
     if (department) filter.department = department;
@@ -1948,6 +2066,7 @@ const exportSectionsPdf = async (req, res) => {
     }));
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Class Sections Directory',
       subtitle: 'Classroom cohorts, departments, admission batches, and academic session groupings',
       columns: [
@@ -2111,7 +2230,7 @@ const importSectionsCsv = async (req, res) => {
 // ==================== SUBJECTS ====================
 const createSubject = async (req, res) => {
   try {
-    const { name, code, department, semester, year, credits, teacher } = req.body;
+    const { name, code, department, semester, year, credits, teacher, batch } = req.body;
     if (!name || !code || !department || !semester) {
       return res.status(400).json({ message: 'Name, code, department, and semester are required.' });
     }
@@ -2129,6 +2248,7 @@ const createSubject = async (req, res) => {
       semester: sem,
       year: yr,
       credits: credits ? Number(credits) : 3,
+      batch: batch && mongoose.Types.ObjectId.isValid(batch) ? batch : null,
     });
     await subject.save();
 
@@ -2170,10 +2290,12 @@ const createSubject = async (req, res) => {
       }
     }
 
-    const populated = await Subject.findById(subject._id).populate({
-      path: 'department',
-      populate: { path: 'course', select: 'name code durationYears' },
-    });
+    const populated = await Subject.findById(subject._id)
+      .populate({
+        path: 'department',
+        populate: { path: 'course', select: 'name code durationYears' },
+      })
+      .populate('batch', 'name startYear endYear isActive');
 
     const result = populated.toObject();
     result.assignedSectionsCount = assignedSectionsCount;
@@ -2190,11 +2312,27 @@ const createSubject = async (req, res) => {
 
 const getSubjects = async (req, res) => {
   try {
-    const { department, semester, year, course } = req.query;
+    const { department, semester, year, course, batch, isActive, includeArchived } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (semester) filter.semester = Number(semester);
     if (year) filter.year = Number(year);
+    if (batch && batch !== 'all') {
+      if (mongoose.Types.ObjectId.isValid(batch)) {
+        filter.batch = batch;
+      }
+    }
+
+    if (includeArchived === 'true' || isActive === 'all') {
+      // no isActive filter
+    } else if (isActive === 'false' || isActive === 'archived') {
+      filter.isActive = false;
+    } else if (isActive === 'true' || isActive === 'active') {
+      filter.isActive = { $ne: false };
+    } else {
+      // Default to active only
+      filter.isActive = { $ne: false };
+    }
 
     if (course) {
       const courseDoc = mongoose.Types.ObjectId.isValid(course)
@@ -2211,6 +2349,7 @@ const getSubjects = async (req, res) => {
 
     const subjects = await Subject.find(filter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
+      .populate('batch', 'name startYear endYear isActive')
       .sort({ year: 1, semester: 1, code: 1 });
 
     const subjectIds = subjects.map((s) => s._id);
@@ -2250,7 +2389,7 @@ const getSubjects = async (req, res) => {
 const updateSubject = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, code, department, semester, year, credits, teacher } = req.body;
+    const { name, code, department, semester, year, credits, teacher, batch } = req.body;
 
     const subject = await Subject.findById(id);
     if (!subject) {
@@ -2269,6 +2408,9 @@ const updateSubject = async (req, res) => {
       subject.year = yr;
     }
     if (credits !== undefined) subject.credits = Number(credits);
+    if (batch !== undefined) {
+      subject.batch = batch && mongoose.Types.ObjectId.isValid(batch) ? batch : null;
+    }
 
     await subject.save();
 
@@ -2309,10 +2451,12 @@ const updateSubject = async (req, res) => {
       }
     }
 
-    const populated = await Subject.findById(subject._id).populate({
-      path: 'department',
-      populate: { path: 'course', select: 'name code durationYears' },
-    });
+    const populated = await Subject.findById(subject._id)
+      .populate({
+        path: 'department',
+        populate: { path: 'course', select: 'name code durationYears' },
+      })
+      .populate('batch', 'name startYear endYear isActive');
 
     const result = populated.toObject();
     result.assignedSectionsCount = assignedSectionsCount;
@@ -2360,13 +2504,132 @@ const deleteSubject = async (req, res) => {
   }
 };
 
+const forceDeleteSubject = async (req, res) => {
+  const session = await mongoose.startSession();
+  try {
+    session.startTransaction();
+
+    const { id } = req.params;
+    const subject = await Subject.findById(id).session(session);
+    if (!subject) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(404).json({ message: 'Subject not found.' });
+    }
+
+    // 1. Cascade delete TeacherSubject allocations
+    const tsResult = await TeacherSubject.deleteMany({ subject: id }, { session });
+
+    // 2. Cascade delete PeriodSlot timetable scheduling
+    const slotResult = await PeriodSlot.deleteMany({ subject: id }, { session });
+
+    // 3. Cascade delete Attendance records
+    const attResult = await Attendance.deleteMany({ subject: id }, { session });
+
+    // 4. Delete the Subject itself
+    await Subject.findByIdAndDelete(id, { session });
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json({
+      message: `Subject '${subject.name}' (${subject.code}) and all associated dependencies (${tsResult.deletedCount} faculty allocations, ${slotResult.deletedCount} timetable slots, ${attResult.deletedCount} attendance records) have been permanently deleted.`,
+      deletedSubject: {
+        _id: subject._id,
+        name: subject.name,
+        code: subject.code,
+      },
+      stats: {
+        teacherSubjects: tsResult.deletedCount,
+        periodSlots: slotResult.deletedCount,
+        attendanceRecords: attResult.deletedCount,
+      },
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
+    console.error('forceDeleteSubject error:', error);
+    return res.status(500).json({
+      message: 'Error executing permanent cascade delete for subject',
+      error: error.message,
+    });
+  }
+};
+
+const archiveSubject = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const subject = await Subject.findById(id);
+    if (!subject) {
+      return res.status(404).json({ message: 'Subject not found.' });
+    }
+
+    subject.isActive = false;
+    await subject.save();
+
+    const populated = await Subject.findById(subject._id)
+      .populate({
+        path: 'department',
+        populate: { path: 'course', select: 'name code durationYears' },
+      })
+      .populate('batch', 'name startYear endYear isActive');
+
+    return res.status(200).json({
+      message: `Subject '${subject.name}' (${subject.code}) has been archived successfully.`,
+      subject: populated,
+    });
+  } catch (error) {
+    console.error('archiveSubject error:', error);
+    return res.status(500).json({ message: 'Error archiving subject', error: error.message });
+  }
+};
+
+const restoreSubject = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const subject = await Subject.findById(id);
+    if (!subject) {
+      return res.status(404).json({ message: 'Subject not found.' });
+    }
+
+    subject.isActive = true;
+    await subject.save();
+
+    const populated = await Subject.findById(subject._id)
+      .populate({
+        path: 'department',
+        populate: { path: 'course', select: 'name code durationYears' },
+      })
+      .populate('batch', 'name startYear endYear isActive');
+
+    return res.status(200).json({
+      message: `Subject '${subject.name}' (${subject.code}) has been restored successfully.`,
+      subject: populated,
+    });
+  } catch (error) {
+    console.error('restoreSubject error:', error);
+    return res.status(500).json({ message: 'Error restoring subject', error: error.message });
+  }
+};
+
 const exportSubjectsCsv = async (req, res) => {
   try {
-    const { course, department, semester, year } = req.query;
+    const { course, department, semester, year, isActive, includeArchived } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (semester) filter.semester = Number(semester);
     if (year) filter.year = Number(year);
+
+    if (includeArchived === 'true' || isActive === 'all') {
+      // no isActive filter
+    } else if (isActive === 'false' || isActive === 'archived') {
+      filter.isActive = false;
+    } else if (isActive === 'true' || isActive === 'active') {
+      filter.isActive = { $ne: false };
+    } else {
+      filter.isActive = { $ne: false };
+    }
+
     if (course) {
       const courseDoc = mongoose.Types.ObjectId.isValid(course)
         ? await Course.findById(course)
@@ -2389,8 +2652,9 @@ const exportSubjectsCsv = async (req, res) => {
       year: s.year || Math.min(4, Math.max(1, Math.ceil((s.semester || 1) / 2))),
       semester: s.semester,
       credits: s.credits,
+      status: s.isActive !== false ? 'Active' : 'Archived',
     }));
-    const csvData = toCsv(rows, ['courseCode', 'departmentCode', 'name', 'code', 'year', 'semester', 'credits']);
+    const csvData = toCsv(rows, ['courseCode', 'departmentCode', 'name', 'code', 'year', 'semester', 'credits', 'status']);
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="subjects.csv"');
     return res.status(200).send(csvData);
@@ -2402,11 +2666,23 @@ const exportSubjectsCsv = async (req, res) => {
 
 const exportSubjectsPdf = async (req, res) => {
   try {
-    const { course, department, semester, year } = req.query;
+    const settings = await Setting.findOne();
+    const { course, department, semester, year, isActive, includeArchived } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (semester) filter.semester = Number(semester);
     if (year) filter.year = Number(year);
+
+    if (includeArchived === 'true' || isActive === 'all') {
+      // no isActive filter
+    } else if (isActive === 'false' || isActive === 'archived') {
+      filter.isActive = false;
+    } else if (isActive === 'true' || isActive === 'active') {
+      filter.isActive = { $ne: false };
+    } else {
+      filter.isActive = { $ne: false };
+    }
+
     if (course) {
       const courseDoc = mongoose.Types.ObjectId.isValid(course)
         ? await Course.findById(course)
@@ -2429,9 +2705,11 @@ const exportSubjectsPdf = async (req, res) => {
       year: `Year ${s.year || Math.min(4, Math.max(1, Math.ceil((s.semester || 1) / 2)))}`,
       semester: `Sem ${s.semester}`,
       credits: s.credits,
+      status: s.isActive !== false ? 'Active' : 'Archived',
     }));
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Curriculum Subjects Master List',
       subtitle: 'Official course catalogue, subject codes, credit allocations, and year mappings',
       columns: [
@@ -2442,6 +2720,7 @@ const exportSubjectsPdf = async (req, res) => {
         { header: 'Year', key: 'year', align: 'center' },
         { header: 'Semester', key: 'semester', align: 'center' },
         { header: 'Credits', key: 'credits', align: 'center' },
+        { header: 'Status', key: 'status', align: 'center' },
       ],
       rows,
     });
@@ -3180,6 +3459,7 @@ const exportStudentsCsv = async (req, res) => {
 
 const exportStudentsPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const { department, section, semester, year, course, search, isActive, batch } = req.query;
     const filter = {};
     if (isActive !== undefined && isActive !== 'all') {
@@ -3242,6 +3522,7 @@ const exportStudentsPdf = async (req, res) => {
     }));
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Student Records Official Roster',
       subtitle: 'Enrolled students, academic cohorts, and cohort batch assignments',
       columns: [
@@ -3329,7 +3610,7 @@ const backfillMissingYears = async (req, res) => {
 // ==================== PERIOD SLOTS (Timetable & Conflict Check) ====================
 const createPeriodSlot = async (req, res) => {
   try {
-    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel } = req.body;
+    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel, batch } = req.body;
     const isRecessBool = Boolean(isRecess);
 
     if (section === undefined || dayOfWeek === undefined || periodNumber === undefined || !startTime || !endTime || !session) {
@@ -3365,6 +3646,13 @@ const createPeriodSlot = async (req, res) => {
           message: `Access denied. HOD can only manage timetable for their assigned course and year.`,
         });
       }
+    }
+
+    let slotBatch = null;
+    if (batch && mongoose.Types.ObjectId.isValid(batch)) {
+      slotBatch = batch;
+    } else if (secDoc.batch) {
+      slotBatch = secDoc.batch;
     }
 
     const dayNum = Number(dayOfWeek);
@@ -3433,6 +3721,7 @@ const createPeriodSlot = async (req, res) => {
       session,
       isRecess: isRecessBool,
       recessLabel: isRecessBool ? recessLabel.trim() : '',
+      batch: slotBatch,
     });
 
     await slot.save();
@@ -3447,7 +3736,8 @@ const createPeriodSlot = async (req, res) => {
         select: 'name email employeeId department',
         populate: { path: 'department', select: 'name code' },
       })
-      .populate('session', 'year semesterLabel');
+      .populate('session', 'year semesterLabel')
+      .populate('batch', 'name startYear endYear isActive');
 
     return res.status(201).json(populated);
   } catch (error) {
@@ -3459,7 +3749,7 @@ const createPeriodSlot = async (req, res) => {
 const updatePeriodSlot = async (req, res) => {
   try {
     const { id } = req.params;
-    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel } = req.body;
+    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel, batch } = req.body;
 
     const slot = await PeriodSlot.findById(id).populate('section');
     if (!slot) {
@@ -3581,6 +3871,9 @@ const updatePeriodSlot = async (req, res) => {
     if (session) slot.session = targetSession;
     slot.isRecess = isRecessBool;
     slot.recessLabel = targetRecessLabel;
+    if (batch !== undefined) {
+      slot.batch = batch && mongoose.Types.ObjectId.isValid(batch) ? batch : null;
+    }
 
     await slot.save();
 
@@ -3595,7 +3888,8 @@ const updatePeriodSlot = async (req, res) => {
         select: 'name email employeeId department',
         populate: { path: 'department', select: 'name code' },
       })
-      .populate('session', 'year semesterLabel');
+      .populate('session', 'year semesterLabel')
+      .populate('batch', 'name startYear endYear isActive');
 
     return res.status(200).json(populated);
   } catch (error) {
@@ -3769,12 +4063,17 @@ const resolvePeriodTimingInconsistency = async (req, res) => {
 
 const getPeriodSlots = async (req, res) => {
   try {
-    const { section, department, dayOfWeek, teacher, session, year, course } = req.query;
+    const { section, department, dayOfWeek, teacher, session, year, course, batch } = req.query;
     const filter = {};
     if (section) filter.section = section;
     if (dayOfWeek !== undefined) filter.dayOfWeek = Number(dayOfWeek);
     if (teacher) filter.teacher = teacher;
     if (session) filter.session = session;
+    if (batch && batch !== 'all') {
+      if (mongoose.Types.ObjectId.isValid(batch)) {
+        filter.batch = batch;
+      }
+    }
 
     let query = PeriodSlot.find(filter)
       .populate({
@@ -3788,6 +4087,7 @@ const getPeriodSlots = async (req, res) => {
         populate: { path: 'department', select: 'name code' },
       })
       .populate('session', 'year semesterLabel')
+      .populate('batch', 'name startYear endYear isActive')
       .sort({ dayOfWeek: 1, periodNumber: 1 });
 
     const slots = await query;
@@ -3950,6 +4250,7 @@ const exportPeriodSlotsCsv = async (req, res) => {
 
 const exportTimetablePdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const section = req.query.section || req.query.sectionId;
     if (!section) {
       return res.status(400).json({ message: 'Section ID query parameter is required.' });
@@ -3990,6 +4291,7 @@ const exportTimetablePdf = async (req, res) => {
       .populate('teacher', 'name email employeeId');
 
     const html = buildTimetablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       section: sectionDoc,
       course: sectionDoc.department?.course,
       department: sectionDoc.department,
@@ -4427,6 +4729,7 @@ const exportHolidaysCsv = async (req, res) => {
 
 const exportHolidaysPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const holidays = await Holiday.find()
       .populate('course', 'code')
       .populate('department', 'code')
@@ -4448,6 +4751,7 @@ const exportHolidaysPdf = async (req, res) => {
     });
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Institutional Holiday Calendar',
       subtitle: 'Official list of scheduled academic and national holidays',
       columns: [
@@ -4808,6 +5112,7 @@ const getGlobalReports = async (req, res) => {
 
 const exportReportsPdf = async (req, res) => {
   try {
+    const settings = await Setting.findOne();
     const { department } = req.query;
     const depts = await Department.find(department ? { _id: department } : {}).populate('course');
     const rows = [];
@@ -4825,6 +5130,7 @@ const exportReportsPdf = async (req, res) => {
     }
 
     const html = buildGenericTablePdfHtml({
+      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Consolidated Academic & Department Analytics Report',
       subtitle: 'Overview of department enrollment, sections, and program distribution',
       columns: [
@@ -4849,17 +5155,17 @@ const exportReportsPdf = async (req, res) => {
 
 const getAdminDefaulters = async (req, res) => {
   try {
-    const { month, department, course, year, subject, mode } = req.query;
-    if (!month) {
-      return res.status(400).json({ message: 'Month query parameter in YYYY-MM format is required.' });
-    }
+    const { month, startDate, endDate, department, course, year, subject, mode, batch, batchId } = req.query;
 
     const data = await calculateDefaulters({
       month,
+      startDate,
+      endDate,
       courseId: course || null,
       departmentId: department || null,
       year: year ? Number(year) : null,
       subjectId: subject || null,
+      batchId: batchId || batch || null,
       mode: mode || (subject ? 'subject' : 'overall'),
     });
 
@@ -4872,35 +5178,47 @@ const getAdminDefaulters = async (req, res) => {
 
 const exportDefaultersPdf = async (req, res) => {
   try {
-    let { month, department, course, year, subject, mode } = req.query;
-    if (!month) {
-      month = new Date().toISOString().slice(0, 7);
-    }
+    const settings = await Setting.findOne();
+    let { month, startDate, endDate, department, course, year, subject, mode, batch, batchId } = req.query;
 
     const data = await calculateDefaulters({
       month,
+      startDate,
+      endDate,
       courseId: course || null,
       departmentId: department || null,
       year: year ? Number(year) : null,
       subjectId: subject || null,
+      batchId: batchId || batch || null,
       mode: mode || (subject ? 'subject' : 'overall'),
     });
+
+    let batchLabel = '';
+    if (batch || batchId) {
+      const bDoc = await Batch.findById(batchId || batch);
+      if (bDoc) batchLabel = bDoc.name;
+    }
 
     const rows = (data.defaulters || []).map((d) => ({
       rollNumber: d.rollNumber || 'N/A',
       name: d.name || 'N/A',
       courseDept: d.courseDept || (d.courseCode && d.departmentCode ? `${d.courseCode} · ${d.departmentCode}` : d.departmentName || d.department || 'N/A'),
+      batch: d.batchName || batchLabel || '—',
       section: d.section || d.sectionName || 'N/A',
       year: d.year ? `Year ${d.year}` : 'N/A',
       attended: `${d.present != null ? d.present : (d.attended != null ? d.attended : 'N/A')} / ${d.totalPeriods != null ? d.totalPeriods : 'N/A'}`,
       percentage: `${d.percentage != null && !isNaN(d.percentage) ? d.percentage : 'N/A'}%`,
     }));
 
+    const dateFilterLabel = data.rangeLabel || (data.startDate && data.endDate ? `${data.startDate} to ${data.endDate}` : data.month || 'Current Period');
+
     const html = buildGenericTablePdfHtml({
-      title: `Attendance Defaulters Report · ${month}`,
+      institutionName: settings?.institutionName || settings?.collegeName || 'Everest College',
+      title: `Attendance Defaulters Report · ${dateFilterLabel}`,
       subtitle: `Students falling below mandatory attendance threshold (${data.thresholdPercent || 75}%)`,
       filters: {
-        Month: month,
+        'Date Range': dateFilterLabel,
+        ...(batchLabel ? { Batch: batchLabel } : {}),
         Mode: data.mode === 'subject' ? 'Subject-wise' : 'Overall',
         Threshold: `${data.thresholdPercent || 75}%`,
       },
@@ -4908,6 +5226,7 @@ const exportDefaultersPdf = async (req, res) => {
         { header: 'Roll No', key: 'rollNumber', align: 'center' },
         { header: 'Student Name', key: 'name' },
         { header: 'Program / Dept', key: 'courseDept', align: 'center' },
+        { header: 'Cohort Batch', key: 'batch', align: 'center' },
         { header: 'Section', key: 'section', align: 'center' },
         { header: 'Year', key: 'year', align: 'center' },
         { header: 'Attended / Total', key: 'attended', align: 'center' },
@@ -4922,7 +5241,7 @@ const exportDefaultersPdf = async (req, res) => {
 
     const pdfBuffer = await generatePdf(html);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="defaulters_${month}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="defaulters_report.pdf"`);
     return res.status(200).send(pdfBuffer);
   } catch (err) {
     console.error('exportDefaultersPdf error:', err);
@@ -4961,6 +5280,8 @@ module.exports = {
   importUsersCsv,
   createSession,
   getSessions,
+  updateSession,
+  deleteSession,
   createSection,
   getSections,
   updateSection,
@@ -4972,6 +5293,9 @@ module.exports = {
   getSubjects,
   updateSubject,
   deleteSubject,
+  forceDeleteSubject,
+  archiveSubject,
+  restoreSubject,
   exportSubjectsCsv,
   exportSubjectsPdf,
   importSubjectsCsv,

@@ -23,11 +23,13 @@ export interface User {
   role: UserRole;
   department?: Department | any;
   course?: Course | any;
-  year?: number; // 1, 2, 3, 4 (for HOD role)
+  year?: number; // 1, 2, 3, 4 (legacy/optional)
   employeeId?: string;
   phone?: string;
   teachingYears?: number[];
   currentlyTeachingYears?: number[];
+  assignedBatches?: (Batch | any)[];
+  batches?: (Batch | any)[];
   isActive: boolean;
   createdAt?: string;
 }
@@ -61,6 +63,8 @@ export interface Subject {
   semester: number;
   year: number; // 1, 2, 3, 4
   credits: number;
+  batch?: Batch | any;
+  isActive?: boolean;
   assignedTeacher?: User | any;
   assignedTeachers?: { teacher: User; section: Section }[];
   createdAt?: string;
@@ -83,6 +87,8 @@ export interface Batch {
   endYear: number;
   isActive: boolean;
   studentCount?: number;
+  assignedTeachers?: (User | any)[];
+  coordinators?: (User | any)[];
   createdAt?: string;
 }
 
@@ -98,6 +104,10 @@ export interface Student {
   email?: string;
   phone?: string;
   isActive: boolean;
+  condonedPeriods?: number;
+  condonationReason?: string;
+  condonedBy?: User | string;
+  condonedAt?: string;
   createdAt?: string;
 }
 
@@ -120,6 +130,7 @@ export interface PeriodSlot {
   subject?: Subject | any;
   teacher?: User | any;
   session: AcademicSession | any;
+  batch?: Batch | any;
   isRecess?: boolean;
   recessLabel?: string;
   studentCount?: number;
@@ -194,6 +205,8 @@ export interface DefaulterRecord {
   present: number;
   late: number;
   absent: number;
+  condonedPeriods?: number;
+  condonationReason?: string;
   percentage: number;
 }
 

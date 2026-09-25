@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, BookOpen, User, Layers, Building2 } from 'lucide-react';
+import { Plus, BookOpen, User, Layers, Building2, Trash2, Edit2 } from 'lucide-react';
 import api from '../../lib/api';
-import { TeacherSubjectAssignment, User as UserType, Subject, Section, Department } from '../../types';
+import { TeacherSubjectAssignment, User as UserType, Subject, Section, Department, Batch } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
@@ -15,11 +15,14 @@ export const HodAssignments: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [semFilter, setSemFilter] = useState<string>('all');
+  const [batchFilter, setBatchFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingAssignment, setEditingAssignment] = useState<TeacherSubjectAssignment | null>(null);
   const [teacher, setTeacher] = useState('');
   const [subject, setSubject] = useState('');
   const [section, setSection] = useState('');
@@ -40,26 +43,31 @@ export const HodAssignments: React.FC = () => {
       const params: any = {};
       if (deptFilter !== 'all') params.department = deptFilter;
       if (semFilter !== 'all') params.semester = semFilter;
+      if (batchFilter !== 'all') params.batch = batchFilter;
 
-      const [asgnRes, tchRes, subRes, secRes, deptRes] = await Promise.all([
+      const [asgnRes, tchRes, subRes, secRes, deptRes, batchRes] = await Promise.all([
         api.get('/hod/teacher-subjects', { params }),
         api.get('/hod/teacher-directory'), // Cross-department faculty directory
         api.get('/hod/subjects', { params }),
         api.get('/hod/sections', { params: deptFilter !== 'all' ? { department: deptFilter } : {} }),
         api.get('/hod/departments'),
+        api.get('/hod/batches'),
       ]);
       setAssignments(asgnRes.data);
       setTeachers(tchRes.data);
       setSubjects(subRes.data);
       setSections(secRes.data);
       setDepartments(deptRes.data);
+      setBatches(batchRes.data);
 
-      if (tchRes.data[0]) setTeacher(tchRes.data[0]._id);
-      if (subRes.data[0]) setSubject(subRes.data[0]._id);
-      if (secRes.data[0]) {
-        setSection(secRes.data[0]._id);
-        const sesId = secRes.data[0].session?._id || secRes.data[0].session;
-        if (sesId) setSession(sesId);
+      if (!editingAssignment) {
+        if (tchRes.data[0]) setTeacher(tchRes.data[0]._id);
+        if (subRes.data[0]) setSubject(subRes.data[0]._id);
+        if (secRes.data[0]) {
+          setSection(secRes.data[0]._id);
+          const sesId = secRes.data[0].session?._id || secRes.data[0].session;
+          if (sesId) setSession(sesId);
+        }
       }
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching assignments', 'error');
@@ -70,9 +78,32 @@ export const HodAssignments: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [deptFilter, semFilter]);
+  }, [deptFilter, semFilter, batchFilter]);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const openCreateModal = () => {
+    setEditingAssignment(null);
+    if (teachers[0]) setTeacher(teachers[0]._id);
+    if (subjects[0]) setSubject(subjects[0]._id);
+    if (sections[0]) {
+      setSection(sections[0]._id);
+      const sesId = (sections[0].session as any)?._id || sections[0].session;
+      if (sesId) setSession(sesId);
+    }
+    setIsModalOpen(true);
+  };
+
+  const openEditModal = (asgn: TeacherSubjectAssignment) => {
+    setEditingAssignment(asgn);
+    setTeacher((asgn.teacher as any)?._id || asgn.teacher || '');
+    setSubject((asgn.subject as any)?._id || asgn.subject || '');
+    const secId = (asgn.section as any)?._id || asgn.section || '';
+    setSection(secId);
+    const sesId = (asgn.session as any)?._id || asgn.session || '';
+    setSession(sesId);
+    setIsModalOpen(true);
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!teacher || !subject || !section || !session) {
       showToast('Please select all required fields.', 'warning');
@@ -81,17 +112,28 @@ export const HodAssignments: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      await api.post('/hod/teacher-subjects', {
-        teacher,
-        subject,
-        section,
-        session,
-      });
-      showToast('Faculty subject allocation created successfully', 'success');
+      if (editingAssignment) {
+        await api.patch(`/hod/teacher-subjects/${editingAssignment._id}`, {
+          teacher,
+          subject,
+          section,
+          session,
+        });
+        showToast('Faculty subject allocation updated successfully', 'success');
+      } else {
+        await api.post('/hod/teacher-subjects', {
+          teacher,
+          subject,
+          section,
+          session,
+        });
+        showToast('Faculty subject allocation created successfully', 'success');
+      }
       setIsModalOpen(false);
+      setEditingAssignment(null);
       fetchData();
     } catch (err: any) {
-      showToast(err.customMessage || 'Failed to create assignment', 'error');
+      showToast(err.customMessage || 'Failed to save assignment', 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -154,7 +196,7 @@ export const HodAssignments: React.FC = () => {
     {
       header: 'Academic Session & Batch',
       render: (row) => {
-        const batchName = row.section?.batch?.name || (typeof row.section?.batch === 'string' ? row.section.batch : '');
+        const batchName = row.section?.batch?.name || row.subject?.batch?.name || (typeof row.section?.batch === 'string' ? row.section.batch : '');
         return (
           <div className="flex flex-col gap-1">
             {batchName ? (
@@ -162,7 +204,7 @@ export const HodAssignments: React.FC = () => {
                 {batchName} Batch
               </span>
             ) : (
-              <span className="text-[10px] text-slate-400 italic">No Batch</span>
+              <span className="text-[10px] text-slate-400 italic">Universal</span>
             )}
             <span className="text-xs text-slate-500 font-medium">
               {row.session?.year} · {row.session?.semesterLabel}
@@ -171,7 +213,40 @@ export const HodAssignments: React.FC = () => {
         );
       },
     },
+    {
+      header: 'Actions',
+      className: 'text-right',
+      render: (row) => (
+        <div className="flex items-center justify-end gap-1.5">
+          <button
+            onClick={() => openEditModal(row)}
+            className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors cursor-pointer"
+            title="Edit Allocation"
+          >
+            <Edit2 className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => handleDelete(row._id)}
+            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+            title="Remove Allocation"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      ),
+    },
   ];
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to remove this faculty subject allocation?')) return;
+    try {
+      await api.delete(`/hod/teacher-subjects/${id}`);
+      showToast('Subject allocation removed successfully', 'success');
+      fetchData();
+    } catch (err: any) {
+      showToast(err.customMessage || 'Failed to remove allocation', 'error');
+    }
+  };
 
   const yearNum = user?.year || 1;
   const yearSemesters = [yearNum * 2 - 1, yearNum * 2];
@@ -200,12 +275,13 @@ export const HodAssignments: React.FC = () => {
             queryParams={{
               department: deptFilter !== 'all' ? deptFilter : undefined,
               semester: semFilter !== 'all' ? semFilter : undefined,
+              batch: batchFilter !== 'all' ? batchFilter : undefined,
             }}
           />
 
           <button
-            onClick={() => setIsModalOpen(true)}
-            className="px-4 py-2 rounded-xl text-sm font-semibold gradient-btn flex items-center gap-2 shadow-md shadow-purple-500/20 text-white w-fit"
+            onClick={openCreateModal}
+            className="px-4 py-2 rounded-xl text-sm font-semibold gradient-btn flex items-center gap-2 shadow-md shadow-purple-500/20 text-white w-fit cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>New Subject Allocation</span>
@@ -213,8 +289,8 @@ export const HodAssignments: React.FC = () => {
         </div>
       </div>
 
-      {/* 2 Independent Filter Dropdowns: Department & Semester within locked Year */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+      {/* 3 Independent Filter Dropdowns: Department, Semester, Batch */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
         {/* Department Filter */}
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -224,7 +300,7 @@ export const HodAssignments: React.FC = () => {
           <select
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:outline-none focus:border-purple-500"
           >
             <option value="all">All Departments</option>
             {departments.map((d) => (
@@ -244,12 +320,32 @@ export const HodAssignments: React.FC = () => {
           <select
             value={semFilter}
             onChange={(e) => setSemFilter(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:outline-none focus:border-purple-500"
           >
             <option value="all">All Year {yearNum} Semesters</option>
             {yearSemesters.map((sem) => (
               <option key={sem} value={sem.toString()}>
                 Semester {sem}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Batch Filter */}
+        <div>
+          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+            <Layers className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Filter by Batch Cohort</span>
+          </label>
+          <select
+            value={batchFilter}
+            onChange={(e) => setBatchFilter(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500"
+          >
+            <option value="all">All Batch Cohorts</option>
+            {batches.map((b) => (
+              <option key={b._id} value={b._id}>
+                {b.name} ({b.startYear}-{b.endYear})
               </option>
             ))}
           </select>
@@ -265,18 +361,26 @@ export const HodAssignments: React.FC = () => {
           (row.teacher?.name?.toLowerCase().includes(q) ?? false) ||
           (row.subject?.name?.toLowerCase().includes(q) ?? false) ||
           (row.section?.name?.toLowerCase().includes(q) ?? false) ||
-          (row.section?.department?.code?.toLowerCase().includes(q) ?? false)
+          (row.section?.department?.code?.toLowerCase().includes(q) ?? false) ||
+          ((row.section?.batch as any)?.name?.toLowerCase().includes(q) ?? false)
         }
       />
 
       {/* Modal */}
       <Modal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Assign Course Subject to Faculty"
-        subtitle={`Select from campus-wide faculty directory and allocate to ${formatYearLabel(user?.year)} section`}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingAssignment(null);
+        }}
+        title={editingAssignment ? 'Edit Subject Allocation' : 'Assign Course Subject to Faculty'}
+        subtitle={
+          editingAssignment
+            ? `Modify instructor allocation for ${formatYearLabel(user?.year)} section`
+            : `Select from campus-wide faculty directory and allocate to ${formatYearLabel(user?.year)} section`
+        }
       >
-        <form onSubmit={handleCreate} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
               Select Faculty Instructor (Cross-Department) *
@@ -285,7 +389,7 @@ export const HodAssignments: React.FC = () => {
               value={teacher}
               onChange={(e) => setTeacher(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10"
             >
               {teachers.map((t) => {
                 const deptName = (t.department as any)?.code || (t.department as any)?.name || 'Campus';
@@ -306,7 +410,7 @@ export const HodAssignments: React.FC = () => {
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10"
             >
               {subjects.map((s) => {
                 const deptCode = (s.department as any)?.code || (s.department as any)?.name || '';
@@ -333,13 +437,14 @@ export const HodAssignments: React.FC = () => {
                 if (sesId) setSession(sesId);
               }}
               required
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10"
             >
               {sections.map((sec) => {
                 const dept = (sec.department as any)?.code || (sec.department as any)?.name || 'Dept';
+                const batch = (sec.batch as any)?.name ? `· ${(sec.batch as any).name}` : '';
                 return (
                   <option key={sec._id} value={sec._id}>
-                    {sec.name} ({dept} · Sem {sec.semester})
+                    {sec.name} ({dept} {batch} · Sem {sec.semester})
                   </option>
                 );
               })}
@@ -349,18 +454,21 @@ export const HodAssignments: React.FC = () => {
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
             <button
               type="button"
-              onClick={() => setIsModalOpen(false)}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800"
+              onClick={() => {
+                setIsModalOpen(false);
+                setEditingAssignment(null);
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800 cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-5 py-2 rounded-xl text-xs font-semibold gradient-btn flex items-center gap-2 text-white shadow-sm"
+              className="px-5 py-2 rounded-xl text-xs font-semibold gradient-btn flex items-center gap-2 text-white shadow-sm cursor-pointer"
             >
               {isSubmitting && <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-              <span>Save Allocation</span>
+              <span>{editingAssignment ? 'Update Allocation' : 'Save Allocation'}</span>
             </button>
           </div>
         </form>

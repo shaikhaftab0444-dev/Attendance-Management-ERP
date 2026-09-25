@@ -27,6 +27,18 @@ const batchSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  assignedTeachers: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  ],
+  coordinators: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  ],
   createdAt: {
     type: Date,
     default: Date.now,

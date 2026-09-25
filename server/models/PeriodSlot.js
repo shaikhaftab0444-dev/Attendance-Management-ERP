@@ -50,6 +50,11 @@ const periodSlotSchema = new mongoose.Schema({
     ref: 'AcademicSession',
     required: true,
   },
+  batch: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Batch',
+    default: null,
+  },
 }, {
   timestamps: true,
 });

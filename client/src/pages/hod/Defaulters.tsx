@@ -7,27 +7,48 @@ import {
   AlertTriangle,
   TrendingDown,
   Building2,
+  ShieldCheck,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Subject, DefaulterRecord, DefaulterResponse, Department } from '../../types';
+import { Subject, DefaulterRecord, DefaulterResponse, Department, Batch } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { StatCard } from '../../components/ui/StatCard';
+import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
 export const HodDefaulters: React.FC = () => {
   const { user } = useAuth();
-  const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const [month, setMonth] = useState<string>(currentMonth);
+  const getInitialDates = () => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return {
+      start: `${y}-${m}-01`,
+      end: `${y}-${m}-${d}`,
+    };
+  };
+
+  const initialDates = getInitialDates();
+  const [startDate, setStartDate] = useState<string>(initialDates.start);
+  const [endDate, setEndDate] = useState<string>(initialDates.end);
   const [deptFilter, setDeptFilter] = useState<string>('all');
+  const [batch, setBatch] = useState<string>('');
   const [subject, setSubject] = useState<string>('');
   const [mode, setMode] = useState<'subject' | 'overall'>('overall');
 
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [batches, setBatches] = useState<Batch[]>([]);
   const [data, setData] = useState<DefaulterResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Condonation / Waiver State
+  const [condoningStudent, setCondoningStudent] = useState<DefaulterRecord | null>(null);
+  const [condoneReason, setCondoneReason] = useState<string>('Medical Leave');
+  const [isCondoning, setIsCondoning] = useState(false);
 
   const { showToast } = useToast();
 
@@ -39,12 +60,14 @@ export const HodDefaulters: React.FC = () => {
 
   const fetchDropdownData = async () => {
     try {
-      const [subRes, deptRes] = await Promise.all([
+      const [subRes, deptRes, batchRes] = await Promise.all([
         api.get('/hod/subjects'),
         api.get('/hod/departments'),
+        api.get('/hod/batches'),
       ]);
       setSubjects(subRes.data);
       setDepartments(deptRes.data);
+      setBatches(batchRes.data);
     } catch (err: any) {
       console.error('Error fetching dropdown data:', err);
     }
@@ -53,8 +76,9 @@ export const HodDefaulters: React.FC = () => {
   const fetchDefaulters = async () => {
     try {
       setIsLoading(true);
-      const params: any = { month, mode };
+      const params: any = { startDate, endDate, mode };
       if (deptFilter !== 'all') params.department = deptFilter;
+      if (batch) params.batch = batch;
       if (subject) params.subject = subject;
 
       const res = await api.get('/hod/defaulters', { params });
@@ -72,7 +96,7 @@ export const HodDefaulters: React.FC = () => {
 
   useEffect(() => {
     fetchDefaulters();
-  }, [month, deptFilter, subject, mode]);
+  }, [startDate, endDate, deptFilter, batch, subject, mode]);
 
   const handleExportCsv = () => {
     if (!data || data.defaulters.length === 0) {
@@ -99,11 +123,29 @@ export const HodDefaulters: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `year_${user?.year || 1}_defaulters_${month}.csv`);
+    link.setAttribute('download', `year_${user?.year || 1}_defaulters_${startDate}_to_${endDate}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     showToast('Defaulters exported to CSV', 'success');
+  };
+
+  const handleCondone = async () => {
+    if (!condoningStudent) return;
+    setIsCondoning(true);
+    try {
+      const res = await api.post(`/attendance/condone/${condoningStudent.studentId}`, {
+        reason: condoneReason,
+      });
+      showToast(res.data?.message || `Waiver granted for ${condoningStudent.name}`, 'success');
+      setCondoningStudent(null);
+      setCondoneReason('Medical Leave');
+      fetchDefaulters();
+    } catch (err: any) {
+      showToast(err.customMessage || err.response?.data?.message || 'Failed to grant attendance waiver', 'error');
+    } finally {
+      setIsCondoning(false);
+    }
   };
 
   const columns: Column<DefaulterRecord>[] = [
@@ -163,6 +205,22 @@ export const HodDefaulters: React.FC = () => {
         </span>
       ),
     },
+    {
+      header: 'Actions',
+      render: (row) => (
+        <button
+          onClick={() => {
+            setCondoningStudent(row);
+            setCondoneReason('Medical Leave');
+          }}
+          className="p-1.5 px-2.5 rounded-lg border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors flex items-center gap-1.5 text-xs font-semibold shadow-sm"
+          title="Grant Attendance Waiver / Grace"
+        >
+          <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <span>Condone</span>
+        </button>
+      ),
+    },
   ];
 
   const stats = data?.stats || { totalDefaulters: 0, avgPercentage: 0, worstPercentage: 0, worstStudent: 'None' };
@@ -177,7 +235,7 @@ export const HodDefaulters: React.FC = () => {
             <span>{formatYearLabel(user?.year)} Defaulters Tracking</span>
           </h2>
           <p className="text-xs text-slate-500">
-            Monthly calculated attendance compliance across all departments in {formatYearLabel(user?.year)} (<span className="text-rose-600 font-semibold">&lt; {threshold}%</span>)
+            Calculated attendance compliance across all departments in {formatYearLabel(user?.year)} (<span className="text-rose-600 font-semibold">&lt; {threshold}%</span>)
           </p>
         </div>
 
@@ -193,11 +251,13 @@ export const HodDefaulters: React.FC = () => {
           <ImportExportBar
             entityName="Defaulters Report"
             pdfExportUrl="/hod/defaulters/export-pdf"
-            pdfFilename={`Year_${user?.year || 1}_Defaulters_${month}.pdf`}
+            pdfFilename={`Year_${user?.year || 1}_Defaulters_${startDate}_to_${endDate}.pdf`}
             queryParams={{
-              month,
+              startDate,
+              endDate,
               mode,
               ...(deptFilter !== 'all' ? { department: deptFilter } : {}),
+              ...(batch ? { batch } : {}),
               ...(subject ? { subject } : {}),
             }}
           />
@@ -205,20 +265,55 @@ export const HodDefaulters: React.FC = () => {
       </div>
 
       {/* Filter Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
-        {/* Month */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+        {/* Start Date */}
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
             <Calendar className="w-3.5 h-3.5 text-purple-600" />
-            <span>Select Month *</span>
+            <span>Start Date *</span>
           </label>
           <input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
             required
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-mono font-medium"
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-mono font-medium"
           />
+        </div>
+
+        {/* End Date */}
+        <div>
+          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+            <Calendar className="w-3.5 h-3.5 text-purple-600" />
+            <span>End Date *</span>
+          </label>
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            required
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-mono font-medium"
+          />
+        </div>
+
+        {/* Cohort Batch Filter */}
+        <div>
+          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+            <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Cohort Batch</span>
+          </label>
+          <select
+            value={batch}
+            onChange={(e) => setBatch(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-medium"
+          >
+            <option value="">All Batches</option>
+            {batches.map((b) => (
+              <option key={b._id} value={b._id}>
+                {b.name} {!b.isActive ? '(Archived)' : ''}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Department Filter */}
@@ -230,7 +325,7 @@ export const HodDefaulters: React.FC = () => {
           <select
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-medium"
           >
             <option value="all">All Departments</option>
             {departments.map((d) => (
@@ -254,7 +349,7 @@ export const HodDefaulters: React.FC = () => {
               setSubject(val);
               if (val) setMode('subject');
             }}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-medium"
           >
             <option value="">All Subjects (Optional)</option>
             {subjects.map((s) => (
@@ -305,7 +400,7 @@ export const HodDefaulters: React.FC = () => {
         <StatCard
           title="Year Defaulters"
           value={stats.totalDefaulters}
-          subtitle={`Under ${threshold}% in ${month}`}
+          subtitle={`Under ${threshold}% (${startDate} to ${endDate})`}
           icon={UserX}
           accentColor={stats.totalDefaulters > 0 ? 'rose' : 'emerald'}
         />
@@ -330,10 +425,10 @@ export const HodDefaulters: React.FC = () => {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="font-bold text-slate-900 text-base">
-              {formatYearLabel(user?.year)} Defaulter Records for {month}
+              {formatYearLabel(user?.year)} Defaulter Records for {startDate} to {endDate}
             </h3>
             <p className="text-xs text-slate-500">
-              Students in {formatYearLabel(user?.year)} falling below the {threshold}% minimum lecture attendance policy
+              Students in {formatYearLabel(user?.year)} falling below the {threshold}% minimum lecture attendance policy for {startDate} to {endDate}
             </p>
           </div>
           <span className="text-xs px-3 py-1 rounded-full bg-rose-50 border border-rose-200 text-rose-700 font-bold tabular-nums">
@@ -352,9 +447,80 @@ export const HodDefaulters: React.FC = () => {
             row.section.toLowerCase().includes(q)
           }
           emptyTitle="No defaulters for this period"
-          emptyDescription={`All students in ${formatYearLabel(user?.year)} have attended >= ${threshold}% of classes for ${month}.`}
+          emptyDescription={`All students in ${formatYearLabel(user?.year)} have attended >= ${threshold}% of classes for ${startDate} to ${endDate}.`}
         />
       </div>
+
+      {/* Condonation / Waiver Modal */}
+      <Modal
+        isOpen={!!condoningStudent}
+        onClose={() => !isCondoning && setCondoningStudent(null)}
+        title="Grant Attendance Waiver (Condonation)"
+        subtitle="Exemption & Grace Attendance Adjustment"
+      >
+        <div className="space-y-4 max-h-[75vh] overflow-y-auto pr-1">
+          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3">
+            <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-emerald-900 leading-relaxed space-y-1.5">
+              <p className="font-semibold text-sm text-emerald-950">
+                Grant Attendance Grace for <span className="underline font-bold">{condoningStudent?.name}</span> ({condoningStudent?.rollNumber})
+              </p>
+              <p>
+                This will calculate and award the exact grace attendance periods needed to elevate the student's attendance to the <span className="font-bold">{threshold}%</span> threshold.
+              </p>
+              <div className="bg-white/90 p-2.5 rounded-lg border border-emerald-200 font-mono text-xs space-y-1">
+                <div>Current Record: <span className="font-bold text-slate-900">{condoningStudent ? condoningStudent.present + condoningStudent.late : 0} / {condoningStudent?.totalPeriods || 0}</span> ({condoningStudent?.percentage}%)</div>
+                <div>Target Compliance: <span className="font-bold text-emerald-700">{threshold}% ({Math.ceil(((threshold / 100) * (condoningStudent?.totalPeriods || 0)))} attended periods required)</span></div>
+                <div>Grace Periods to Add: <span className="font-bold text-blue-700">+{Math.max(1, Math.ceil(((threshold / 100) * (condoningStudent?.totalPeriods || 0))) - (condoningStudent ? condoningStudent.present + condoningStudent.late : 0))} periods</span></div>
+              </div>
+              <p className="text-[11px] text-emerald-800">
+                ✓ Daily lecture audit records and teacher logs remain 100% authentic and uncorrupted.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-semibold text-slate-700">
+              Reason for Exemption *
+            </label>
+            <div className="relative">
+              <select
+                value={condoneReason}
+                onChange={(e) => setCondoneReason(e.target.value)}
+                disabled={isCondoning}
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/10 max-h-48 overflow-y-auto cursor-pointer"
+              >
+                <option value="Medical Leave">Medical Leave (Hospitalization / Doctor Certificate)</option>
+                <option value="Sports & Athletic Tournament">Sports & Athletic Tournament Representation</option>
+                <option value="Official Institutional Duty">Official Institutional Duty / Student Council</option>
+                <option value="Academic Conference / Hackathon">Academic Conference / Hackathon Participation</option>
+                <option value="Bereavement / Family Emergency">Bereavement / Family Emergency</option>
+                <option value="Special Administrative Dean Approval">Special Administrative Dean Approval</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+            <button
+              type="button"
+              disabled={isCondoning}
+              onClick={() => setCondoningStudent(null)}
+              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-600 hover:text-slate-900"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={isCondoning || !condoningStudent}
+              onClick={handleCondone}
+              className="px-5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-2 disabled:opacity-50"
+            >
+              {isCondoning && <div className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+              <span>{isCondoning ? 'Granting Waiver...' : 'Confirm Waiver'}</span>
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

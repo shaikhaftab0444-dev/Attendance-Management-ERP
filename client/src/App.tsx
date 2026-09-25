@@ -13,6 +13,7 @@ import { AdminDashboard } from './pages/admin/Dashboard';
 import { AdminCourses } from './pages/admin/Courses';
 import { AdminDepartments } from './pages/admin/Departments';
 import { AdminBatches } from './pages/admin/Batches';
+import { AdminSessions } from './pages/admin/Sessions';
 import { AdminUsers } from './pages/admin/Users';
 import { AdminStudents } from './pages/admin/Students';
 import { AdminSections } from './pages/admin/Sections';
@@ -26,6 +27,7 @@ import { AdminSettings } from './pages/admin/Settings';
 // HOD
 import { HodDashboard } from './pages/hod/Dashboard';
 import { HodTeachers } from './pages/hod/Teachers';
+import { HodSubjects } from './pages/hod/Subjects';
 import { HodAssignments } from './pages/hod/Assignments';
 import { HodTimetable } from './pages/hod/Timetable';
 import { HodDefaulters } from './pages/hod/Defaulters';
@@ -61,6 +63,7 @@ export const App: React.FC = () => {
               <Route path="courses" element={<AdminCourses />} />
               <Route path="departments" element={<AdminDepartments />} />
               <Route path="batches" element={<AdminBatches />} />
+              <Route path="sessions" element={<AdminSessions />} />
               <Route path="users" element={<AdminUsers />} />
               <Route path="students" element={<AdminStudents />} />
               <Route path="sections" element={<AdminSections />} />
@@ -84,6 +87,7 @@ export const App: React.FC = () => {
             >
               <Route path="dashboard" element={<HodDashboard />} />
               <Route path="teachers" element={<HodTeachers />} />
+              <Route path="subjects" element={<HodSubjects />} />
               <Route path="assignments" element={<HodAssignments />} />
               <Route path="timetable" element={<HodTimetable />} />
               <Route path="defaulters" element={<HodDefaulters />} />

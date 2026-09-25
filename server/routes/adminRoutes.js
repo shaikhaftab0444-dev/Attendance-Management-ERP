@@ -48,6 +48,8 @@ router.delete('/users/:id', roleGuard('admin'), adminController.deleteUser);
 // Sessions (Admin & HOD for read)
 router.post('/sessions', roleGuard('admin'), adminController.createSession);
 router.get('/sessions', roleGuard('admin', 'hod'), adminController.getSessions);
+router.patch('/sessions/:id', roleGuard('admin'), adminController.updateSession);
+router.delete('/sessions/:id', roleGuard('admin'), adminController.deleteSession);
 
 // Sections & CSV/PDF (Admin only)
 router.get('/sections/export', roleGuard('admin'), adminController.exportSectionsCsv);
@@ -64,7 +66,10 @@ router.get('/subjects/export-pdf', roleGuard('admin'), adminController.exportSub
 router.post('/subjects/import', roleGuard('admin'), uploadCsv.single('file'), adminController.importSubjectsCsv);
 router.post('/subjects', roleGuard('admin'), adminController.createSubject);
 router.get('/subjects', roleGuard('admin', 'hod'), adminController.getSubjects);
+router.patch('/subjects/:id/archive', roleGuard('admin'), adminController.archiveSubject);
+router.patch('/subjects/:id/restore', roleGuard('admin'), adminController.restoreSubject);
 router.patch('/subjects/:id', roleGuard('admin'), adminController.updateSubject);
+router.delete('/subjects/:id/force', roleGuard('admin'), adminController.forceDeleteSubject);
 router.delete('/subjects/:id', roleGuard('admin'), adminController.deleteSubject);
 
 // Students & CSV/PDF (Admin only)

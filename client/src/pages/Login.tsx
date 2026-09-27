@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   Lock,
   Mail,
@@ -10,12 +10,10 @@ import {
   CheckCircle2,
   ShieldCheck,
   BarChart3,
-  HelpCircle,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { Modal } from '../components/ui/Modal';
 import loginVideo from '../assets/videos/login-3d-element.mp4';
 
 export const Login: React.FC = () => {
@@ -24,7 +22,6 @@ export const Login: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isForgotModalOpen, setIsForgotModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
   const { login } = useAuth();
@@ -296,13 +293,12 @@ export const Login: React.FC = () => {
                 <span>Remember me</span>
               </label>
 
-              <button
-                type="button"
-                onClick={() => setIsForgotModalOpen(true)}
+              <Link
+                to="/forgot-password"
                 className="text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline transition-colors focus:outline-none"
               >
                 Forgot password?
-              </button>
+              </Link>
             </div>
 
             {/* Submit Button */}
@@ -328,38 +324,6 @@ export const Login: React.FC = () => {
           AttendEdge ERP · Secured Session · © {new Date().getFullYear()}
         </div>
       </div>
-
-      {/* ================= FORGOT PASSWORD MODAL ================= */}
-      <Modal
-        isOpen={isForgotModalOpen}
-        onClose={() => setIsForgotModalOpen(false)}
-        title="Forgot Password"
-        subtitle="Account Recovery Assistance"
-        maxWidth="md"
-      >
-        <div className="space-y-4">
-          <div className="p-4 bg-blue-50/70 border border-blue-200/80 rounded-2xl flex items-start gap-3">
-            <HelpCircle className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-            <div className="text-xs text-blue-900 leading-relaxed">
-              <strong className="block font-bold text-sm mb-1 text-blue-950">
-                Administrator Managed Resets
-              </strong>
-              Password resets are handled by your system administrator. Please contact them
-              directly to reset your password or re-issue your account credentials.
-            </div>
-          </div>
-
-          <div className="flex justify-end pt-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => setIsForgotModalOpen(false)}
-              className="px-5 py-2.5 rounded-xl text-xs font-semibold gradient-btn text-white shadow-sm hover:opacity-95 transition-all"
-            >
-              OK, Understood
-            </button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 };

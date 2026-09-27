@@ -28,4 +28,10 @@ router.post('/login', loginLimiter, authController.login);
 router.post('/logout', authController.logout);
 router.get('/me', auth, authController.getMe);
 
+// Forgot & Reset Password Routes
+router.post('/forgotpassword', loginLimiter, authController.forgotPassword);
+router.post('/forgot-password', loginLimiter, authController.forgotPassword);
+router.put('/resetpassword/:resettoken', authController.resetPassword);
+router.put('/reset-password/:token', authController.resetPassword);
+
 module.exports = router;

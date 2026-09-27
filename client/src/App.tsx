@@ -7,6 +7,8 @@ import { DashboardLayout } from './components/layout/DashboardLayout';
 
 // Auth
 import { Login } from './pages/Login';
+import { ForgotPassword } from './pages/ForgotPassword';
+import { ResetPassword } from './pages/ResetPassword';
 
 // Admin
 import { AdminDashboard } from './pages/admin/Dashboard';
@@ -49,6 +51,8 @@ export const App: React.FC = () => {
           <Routes>
             {/* Public */}
             <Route path="/login" element={<Login />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password/:token" element={<ResetPassword />} />
 
             {/* Admin Routes */}
             <Route

@@ -206,7 +206,6 @@ export const TeacherMarkAttendance: React.FC = () => {
         {todaySlots.map((slot) => {
           const isSelected = selectedSlot?._id === slot._id;
           const slotDept = slot.section?.department?.code || slot.section?.department?.name || 'Dept';
-          const batchName = (slot.batch as any)?.name || (slot.section?.batch as any)?.name || (slot.subject?.batch as any)?.name;
           return (
             <button
               key={slot._id}
@@ -230,12 +229,6 @@ export const TeacherMarkAttendance: React.FC = () => {
                 <span className="font-semibold">{slotDept}</span>
                 <span>·</span>
                 <span>{slot.section?.name} (Yr {slot.section?.year || 1})</span>
-                {batchName && (
-                  <>
-                    <span>·</span>
-                    <span className="font-mono font-medium">Batch {batchName}</span>
-                  </>
-                )}
               </div>
             </button>
           );
@@ -244,7 +237,7 @@ export const TeacherMarkAttendance: React.FC = () => {
 
       {selectedSlot ? (
         <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm space-y-5">
-          {/* Slot Details Banner with Department + Year + Batch */}
+          {/* Slot Details Banner with Department + Year */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
             <div>
               <div className="flex items-center gap-2 flex-wrap mb-1">
@@ -255,11 +248,6 @@ export const TeacherMarkAttendance: React.FC = () => {
                 <span className="text-xs px-2 py-0.5 rounded bg-slate-200/70 border border-slate-300 text-slate-700">
                   {selectedSlot.section?.name} · Year {selectedSlot.section?.year || 1}
                 </span>
-                {((selectedSlot.batch as any)?.name || (selectedSlot.section?.batch as any)?.name || (selectedSlot.subject?.batch as any)?.name) && (
-                  <span className="text-xs px-2 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-semibold font-mono">
-                    Batch {(selectedSlot.batch as any)?.name || (selectedSlot.section?.batch as any)?.name || (selectedSlot.subject?.batch as any)?.name}
-                  </span>
-                )}
               </div>
               <p className="text-xs text-slate-500">
                 Period #{selectedSlot.periodNumber} ({selectedSlot.startTime} - {selectedSlot.endTime}) · {students.length} Enrolled

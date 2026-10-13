@@ -10,7 +10,6 @@ const { uploadCsv } = require('../middleware/upload');
 router.use(auth, roleGuard('hod'));
 
 router.get('/departments', hodController.getDepartments);
-router.get('/batches', hodController.getBatches);
 router.get('/teacher-directory', hodController.getTeacherDirectory);
 
 // Faculty & Staff Management (HOD Scoped CRUD)

@@ -13,7 +13,8 @@ const login = async (req, res) => {
 
     const user = await User.findOne({ email: email.toLowerCase().trim() })
       .populate({ path: 'department', populate: { path: 'course' } })
-      .populate('course');
+      .populate('course')
+      .populate('session');
     if (!user) {
       return res.status(401).json({ message: 'Invalid email or password.' });
     }
@@ -33,6 +34,7 @@ const login = async (req, res) => {
       department: user.department?._id || user.department || null,
       course: user.course?._id || user.course || null,
       year: user.year || null,
+      session: user.session?._id || user.session || null,
     };
 
     const token = jwt.sign(payload, process.env.JWT_SECRET || 'default_jwt_secret', {
@@ -75,6 +77,7 @@ const getMe = async (req, res) => {
     const user = await User.findById(req.user._id)
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('course')
+      .populate('session')
       .select('-passwordHash');
     if (!user) {
       return res.status(404).json({ message: 'User not found.' });

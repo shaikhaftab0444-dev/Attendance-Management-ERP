@@ -14,7 +14,6 @@ import { ResetPassword } from './pages/ResetPassword';
 import { AdminDashboard } from './pages/admin/Dashboard';
 import { AdminCourses } from './pages/admin/Courses';
 import { AdminDepartments } from './pages/admin/Departments';
-import { AdminBatches } from './pages/admin/Batches';
 import { AdminSessions } from './pages/admin/Sessions';
 import { AdminUsers } from './pages/admin/Users';
 import { AdminStudents } from './pages/admin/Students';
@@ -66,7 +65,6 @@ export const App: React.FC = () => {
               <Route path="dashboard" element={<AdminDashboard />} />
               <Route path="courses" element={<AdminCourses />} />
               <Route path="departments" element={<AdminDepartments />} />
-              <Route path="batches" element={<AdminBatches />} />
               <Route path="sessions" element={<AdminSessions />} />
               <Route path="users" element={<AdminUsers />} />
               <Route path="students" element={<AdminStudents />} />

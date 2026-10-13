@@ -13,7 +13,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Department, Subject, Course, Batch, DefaulterRecord, DefaulterResponse } from '../../types';
+import { Department, Subject, Course, DefaulterRecord, DefaulterResponse } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { StatCard } from '../../components/ui/StatCard';
 import { Modal } from '../../components/ui/Modal';
@@ -35,14 +35,12 @@ export const AdminDefaulters: React.FC = () => {
   const [startDate, setStartDate] = useState<string>(initialDates.start);
   const [endDate, setEndDate] = useState<string>(initialDates.end);
   const [course, setCourse] = useState<string>('');
-  const [batch, setBatch] = useState<string>('');
   const [department, setDepartment] = useState<string>('');
   const [year, setYear] = useState<string>('all');
   const [subject, setSubject] = useState<string>('');
   const [mode, setMode] = useState<'subject' | 'overall'>('overall');
 
   const [courses, setCourses] = useState<Course[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [data, setData] = useState<DefaulterResponse | null>(null);
@@ -57,14 +55,12 @@ export const AdminDefaulters: React.FC = () => {
 
   const fetchDropdowns = async () => {
     try {
-      const [crsRes, batchRes, deptRes, subRes] = await Promise.all([
+      const [crsRes, deptRes, subRes] = await Promise.all([
         api.get('/admin/courses'),
-        api.get('/admin/batches'),
         api.get('/admin/departments'),
         api.get('/admin/subjects'),
       ]);
       setCourses(crsRes.data);
-      setBatches(batchRes.data);
       setDepartments(deptRes.data);
       setSubjects(subRes.data);
     } catch (err: any) {
@@ -77,7 +73,6 @@ export const AdminDefaulters: React.FC = () => {
       setIsLoading(true);
       const params: any = { startDate, endDate, mode };
       if (course) params.course = course;
-      if (batch) params.batch = batch;
       if (department) params.department = department;
       if (year !== 'all') params.year = Number(year);
       if (subject) params.subject = subject;
@@ -97,7 +92,7 @@ export const AdminDefaulters: React.FC = () => {
 
   useEffect(() => {
     fetchDefaulters();
-  }, [startDate, endDate, course, batch, department, year, subject, mode]);
+  }, [startDate, endDate, course, department, year, subject, mode]);
 
   const filteredSubjects = useMemo(() => {
     if (!department) return subjects;
@@ -153,7 +148,6 @@ export const AdminDefaulters: React.FC = () => {
           endDate,
           department: department || undefined,
           course: course || undefined,
-          batch: batch || undefined,
           year: year !== 'all' ? year : undefined,
           subject: subject || undefined,
           mode,
@@ -311,7 +305,7 @@ export const AdminDefaulters: React.FC = () => {
       </div>
 
       {/* Filter Toolbar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
         {/* Start Date */}
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -353,7 +347,6 @@ export const AdminDefaulters: React.FC = () => {
             onChange={(e) => {
               const newCourse = e.target.value;
               setCourse(newCourse);
-              setBatch('');
               setSubject('');
             }}
             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
@@ -364,28 +357,6 @@ export const AdminDefaulters: React.FC = () => {
                 {c.name} ({c.code})
               </option>
             ))}
-          </select>
-        </div>
-
-        {/* Cohort Batch Filter */}
-        <div>
-          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Cohort Batch</span>
-          </label>
-          <select
-            value={batch}
-            onChange={(e) => setBatch(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
-          >
-            <option value="">All Batches</option>
-            {batches
-              .filter((b) => !course || (b.course?._id || b.course) === course)
-              .map((b) => (
-                <option key={b._id} value={b._id}>
-                  {b.name} {!b.isActive ? '(Archived)' : ''}
-                </option>
-              ))}
           </select>
         </div>
 

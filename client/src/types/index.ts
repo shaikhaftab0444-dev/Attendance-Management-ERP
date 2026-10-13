@@ -24,12 +24,11 @@ export interface User {
   department?: Department | any;
   course?: Course | any;
   year?: number; // 1, 2, 3, 4 (legacy/optional)
+  session?: AcademicSession | any;
   employeeId?: string;
   phone?: string;
   teachingYears?: number[];
   currentlyTeachingYears?: number[];
-  assignedBatches?: (Batch | any)[];
-  batches?: (Batch | any)[];
   isActive: boolean;
   createdAt?: string;
 }
@@ -51,7 +50,6 @@ export interface Section {
   semester: number;
   year: number; // 1, 2, 3, 4
   session: AcademicSession | any;
-  batch?: Batch | any;
   createdAt?: string;
 }
 
@@ -63,7 +61,6 @@ export interface Subject {
   semester: number;
   year: number; // 1, 2, 3, 4
   credits: number;
-  batch?: Batch | any;
   isActive?: boolean;
   assignedTeacher?: User | any;
   assignedTeachers?: { teacher: User; section: Section }[];
@@ -79,26 +76,14 @@ export interface PeriodTemplate {
   createdAt?: string;
 }
 
-export interface Batch {
-  _id: string;
-  name: string;
-  course: Course | any;
-  startYear: number;
-  endYear: number;
-  isActive: boolean;
-  studentCount?: number;
-  assignedTeachers?: (User | any)[];
-  coordinators?: (User | any)[];
-  createdAt?: string;
-}
-
 export interface Student {
   _id: string;
   name: string;
   rollNumber: string;
+  course?: Course | any;
+  admissionYear: number;
   section: Section | any;
   department: Department | any;
-  batch?: Batch | any;
   semester: number;
   year: number; // 1, 2, 3, 4
   email?: string;
@@ -130,7 +115,6 @@ export interface PeriodSlot {
   subject?: Subject | any;
   teacher?: User | any;
   session: AcademicSession | any;
-  batch?: Batch | any;
   isRecess?: boolean;
   recessLabel?: string;
   studentCount?: number;

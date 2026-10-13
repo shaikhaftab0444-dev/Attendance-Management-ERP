@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, Layers, Building2, RefreshCw, AlertCircle, AlertTriangle, GraduationCap, School, Calendar } from 'lucide-react';
 import api from '../../lib/api';
-import { Section, Department, Course, AcademicSession, Batch } from '../../types';
+import { Section, Department, Course, AcademicSession } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
@@ -12,7 +12,6 @@ export const AdminSections: React.FC = () => {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [sessions, setSessions] = useState<AcademicSession[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filters
@@ -26,7 +25,6 @@ export const AdminSections: React.FC = () => {
   const [modalCourse, setModalCourse] = useState('');
   const [name, setName] = useState('');
   const [department, setDepartment] = useState('');
-  const [modalBatch, setModalBatch] = useState('');
   const [semester, setSemester] = useState(1);
   const [year, setYear] = useState<number>(1);
   const [session, setSession] = useState('');
@@ -43,18 +41,16 @@ export const AdminSections: React.FC = () => {
       if (yearFilter !== 'all') params.year = yearFilter;
       if (deptFilter) params.department = deptFilter;
 
-      const [secRes, deptRes, sesRes, crsRes, bthRes] = await Promise.all([
+      const [secRes, deptRes, sesRes, crsRes] = await Promise.all([
         api.get('/admin/sections', { params }),
         api.get('/admin/departments'),
         api.get('/admin/sessions'),
         api.get('/admin/courses'),
-        api.get('/admin/batches'),
       ]);
       setSections(secRes.data);
       setDepartments(deptRes.data);
       setSessions(sesRes.data);
       setCourses(crsRes.data);
-      setBatches(bthRes.data);
       const activeSes = sesRes.data.find((s: any) => s.isActive) || sesRes.data[0];
       if (!session && activeSes) setSession(activeSes._id);
     } catch (err: any) {
@@ -75,8 +71,6 @@ export const AdminSections: React.FC = () => {
     setModalCourse(firstCourse);
     const deptsForCourse = departments.filter((d) => (d.course?._id || d.course) === firstCourse);
     setDepartment(deptsForCourse[0]?._id || '');
-    const courseBatches = batches.filter((b) => (b.course?._id || b.course) === firstCourse);
-    setModalBatch(courseBatches[0]?._id || '');
     setSemester(1);
     setYear(1);
     setIsModalOpen(true);
@@ -89,7 +83,6 @@ export const AdminSections: React.FC = () => {
     const cId = deptDoc?.course?._id || deptDoc?.course || '';
     setModalCourse(cId);
     setDepartment(deptDoc?._id || sec.department);
-    setModalBatch((sec.batch as any)?._id || sec.batch || '');
     setSemester(sec.semester);
     setYear(sec.year || Math.min(4, Math.max(1, Math.ceil(sec.semester / 2))));
     setSession((sec.session as any)?._id || sec.session);
@@ -112,7 +105,6 @@ export const AdminSections: React.FC = () => {
           semester: Number(semester),
           year: Number(year),
           session,
-          batch: modalBatch || undefined,
         });
         showToast('Section updated successfully', 'success');
       } else {
@@ -122,7 +114,6 @@ export const AdminSections: React.FC = () => {
           semester: Number(semester),
           year: Number(year),
           session,
-          batch: modalBatch || undefined,
         });
         showToast('Section created successfully', 'success');
       }
@@ -148,21 +139,7 @@ export const AdminSections: React.FC = () => {
     }
   };
 
-  const handleBackfillBatches = async () => {
-    setIsBackfilling(true);
-    try {
-      const res = await api.post('/admin/backfill-section-batches');
-      showToast(res.data.message || 'Batch backfill completed!', 'success');
-      fetchData();
-    } catch (err: any) {
-      showToast(err.customMessage || 'Batch sync failed', 'error');
-    } finally {
-      setIsBackfilling(false);
-    }
-  };
-
   const missingYearCount = sections.filter((s) => !s.year).length;
-  const missingBatchCount = sections.filter((s) => !s.batch).length;
 
   // Delete confirmation state
   const [deletingSection, setDeletingSection] = useState<Section | null>(null);
@@ -232,20 +209,6 @@ export const AdminSections: React.FC = () => {
       className: 'text-xs text-slate-600 font-medium tabular-nums',
     },
     {
-      header: 'Batch Cohort',
-      render: (row) => {
-        const b = row.batch as Batch;
-        return b?.name ? (
-          <span className="inline-flex items-center gap-1 font-bold text-xs px-2.5 py-0.5 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-700">
-            <Calendar className="w-3 h-3 text-indigo-600" />
-            <span>{b.name} Batch</span>
-          </span>
-        ) : (
-          <span className="text-xs text-amber-600 italic font-medium">Unassigned</span>
-        );
-      },
-    },
-    {
       header: 'Academic Session',
       render: (row) => {
         const s = row.session as AcademicSession;
@@ -286,7 +249,7 @@ export const AdminSections: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">Academic Sections</h2>
-          <p className="text-xs text-slate-500">Configure class sections, year levels (1st - 4th), admission batches, and semester mappings</p>
+          <p className="text-xs text-slate-500">Configure class sections, year levels (1st - 4th), academic sessions, and semester mappings</p>
         </div>
         <div className="flex items-center gap-2.5 flex-wrap">
           <ImportExportBar
@@ -339,25 +302,6 @@ export const AdminSections: React.FC = () => {
             className="px-3 py-1 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold border border-amber-300 shadow-sm"
           >
             Auto-Fix Now
-          </button>
-        </div>
-      )}
-
-      {missingBatchCount > 0 && (
-        <div className="p-4 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-between gap-3 text-xs text-indigo-900">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-indigo-600 shrink-0" />
-            <span>
-              <strong>Batch Notice:</strong> {missingBatchCount} section(s) need a Batch assigned.
-            </span>
-          </div>
-          <button
-            onClick={handleBackfillBatches}
-            disabled={isBackfilling}
-            className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-semibold flex items-center gap-1.5 shadow-sm transition-all"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isBackfilling ? 'animate-spin' : ''}`} />
-            <span>Sync Batches</span>
           </button>
         </div>
       )}
@@ -449,7 +393,7 @@ export const AdminSections: React.FC = () => {
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={editingSection ? 'Edit Academic Section' : 'Create Academic Section'}
-        subtitle="Specify section name, year level (1st-4th), admission batch, and academic session"
+        subtitle="Specify section name, year level (1st-4th), semester, and academic session"
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -481,8 +425,6 @@ export const AdminSections: React.FC = () => {
                     (d) => (d.course?._id || d.course) === newCourseId
                   );
                   setDepartment(firstMatchingDept?._id || '');
-                  const courseBatches = batches.filter((b) => (b.course?._id || b.course) === newCourseId);
-                  setModalBatch(courseBatches[0]?._id || '');
                 }}
                 required
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
@@ -521,29 +463,6 @@ export const AdminSections: React.FC = () => {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-                <span>Admission Batch Cohort *</span>
-              </label>
-              <select
-                value={modalBatch}
-                disabled={!modalCourse}
-                onChange={(e) => setModalBatch(e.target.value)}
-                required
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <option value="">{modalCourse ? 'Select Batch' : 'Select Course First'}</option>
-                {batches
-                  .filter((b) => (b.course?._id || b.course) === modalCourse)
-                  .map((b) => (
-                    <option key={b._id} value={b._id}>
-                      {b.name} Batch {b.isActive ? '(Active)' : ''}
-                    </option>
-                  ))}
-              </select>
-            </div>
-
-            <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
                 Year Level *
               </label>
@@ -559,9 +478,7 @@ export const AdminSections: React.FC = () => {
                 <option value={4}>4th Year</option>
               </select>
             </div>
-          </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
                 Semester *
@@ -582,24 +499,24 @@ export const AdminSections: React.FC = () => {
                 className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
               />
             </div>
+          </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                Academic Session *
-              </label>
-              <select
-                value={session}
-                onChange={(e) => setSession(e.target.value)}
-                required
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
-              >
-                {sessions.map((s) => (
-                  <option key={s._id} value={s._id}>
-                    {s.year} - {s.semesterLabel} {s.isActive ? '(Current)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+              Academic Session *
+            </label>
+            <select
+              value={session}
+              onChange={(e) => setSession(e.target.value)}
+              required
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+            >
+              {sessions.map((s) => (
+                <option key={s._id} value={s._id}>
+                  {s.year} - {s.semesterLabel} {s.isActive ? '(Current)' : ''}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">

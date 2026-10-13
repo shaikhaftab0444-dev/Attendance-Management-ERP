@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, Edit2, Trash2, Users as UsersIcon, Mail, AlertTriangle, School, Filter, Eye, EyeOff, PhoneCall } from 'lucide-react';
 import api from '../../lib/api';
-import { User, Department, Course, UserRole, Batch } from '../../types';
+import { User, Department, Course, UserRole, AcademicSession } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -14,7 +14,7 @@ export const AdminUsers: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
+  const [sessions, setSessions] = useState<AcademicSession[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filter
@@ -35,8 +35,8 @@ export const AdminUsers: React.FC = () => {
   const [department, setDepartment] = useState('');
   const [courseId, setCourseId] = useState('');
   const [year, setYear] = useState<number>(1);
+  const [sessionId, setSessionId] = useState('');
   const [teachingYears, setTeachingYears] = useState<number[]>([1]);
-  const [assignedBatches, setAssignedBatches] = useState<string[]>([]);
   const [employeeId, setEmployeeId] = useState('');
   const [phone, setPhone] = useState('');
   const [isActive, setIsActive] = useState(true);
@@ -57,16 +57,16 @@ export const AdminUsers: React.FC = () => {
       if (courseFilter) params.course = courseFilter;
       if (yearFilter) params.year = yearFilter;
 
-      const [uRes, dRes, cRes, bRes] = await Promise.all([
+      const [uRes, dRes, cRes, sRes] = await Promise.all([
         api.get('/admin/users', { params }),
         api.get('/admin/departments'),
         api.get('/admin/courses'),
-        api.get('/admin/batches'),
+        api.get('/admin/sessions'),
       ]);
       setUsers(uRes.data);
       setDepartments(dRes.data);
       setCourses(cRes.data);
-      setBatches(bRes.data);
+      setSessions(sRes.data);
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching staff members', 'error');
     } finally {
@@ -91,7 +91,8 @@ export const AdminUsers: React.FC = () => {
     setDepartment(deptsForCourse[0]?._id || '');
     setYear(1);
     setTeachingYears([1]);
-    setAssignedBatches([]);
+    const activeSession = sessions.find((s) => s.isActive)?._id || sessions[0]?._id || '';
+    setSessionId(activeSession);
     setEmployeeId('');
     setPhone('');
     setIsActive(true);
@@ -113,7 +114,8 @@ export const AdminUsers: React.FC = () => {
     setDepartment((user.department as Department)?._id || (user.department as string) || '');
     setYear(user.year || 1);
     setTeachingYears(user.teachingYears && user.teachingYears.length > 0 ? user.teachingYears : [1]);
-    setAssignedBatches((user.assignedBatches || []).map((b: any) => (typeof b === 'object' && b ? b._id : b)));
+    const userSessionId = typeof user.session === 'object' && user.session ? user.session._id : (user.session as string) || '';
+    setSessionId(userSessionId || (sessions.find((s) => s.isActive)?._id || sessions[0]?._id || ''));
     setEmployeeId(user.employeeId || '');
     setPhone(extractPhoneDigits(user.phone));
     setIsActive(user.isActive);
@@ -139,8 +141,16 @@ export const AdminUsers: React.FC = () => {
     }
 
     if (role === 'hod') {
-      if (!assignedBatches || assignedBatches.length === 0) {
-        showToast('Please select at least one managed batch cohort for the HOD.', 'warning');
+      if (!sessionId) {
+        showToast('Please select an Academic Session for the HOD.', 'warning');
+        return;
+      }
+      if (!courseId) {
+        showToast('Please select a Course Program for the HOD.', 'warning');
+        return;
+      }
+      if (!year) {
+        showToast('Please select an Academic Year for the HOD.', 'warning');
         return;
       }
     }
@@ -154,38 +164,28 @@ export const AdminUsers: React.FC = () => {
 
     setIsSubmitting(true);
     try {
+      const payload: any = {
+        name,
+        email,
+        role,
+        department: role === 'teacher' ? department : null,
+        course: role === 'teacher' || role === 'hod' ? courseId : null,
+        year: role === 'teacher' || role === 'hod' ? Number(year) : null,
+        session: role === 'hod' ? sessionId : null,
+        teachingYears: role === 'teacher' ? teachingYears : undefined,
+        employeeId,
+        phone: formattedPhone,
+        isActive,
+      };
+      if (password) {
+        payload.password = password;
+      }
+
       if (editingUser) {
-        await api.patch(`/admin/users/${editingUser._id}`, {
-          name,
-          email,
-          password: password || undefined,
-          role,
-          department: role === 'teacher' ? department : null,
-          course: role === 'teacher' ? courseId : null,
-          year: role === 'teacher' ? Number(year) : null,
-          teachingYears: role === 'teacher' ? teachingYears : undefined,
-          assignedBatches: role === 'hod' || role === 'teacher' ? assignedBatches : [],
-          batches: role === 'hod' ? assignedBatches : [],
-          employeeId,
-          phone: formattedPhone,
-          isActive,
-        });
+        await api.patch(`/admin/users/${editingUser._id}`, payload);
         showToast('User account updated successfully', 'success');
       } else {
-        await api.post('/admin/users', {
-          name,
-          email,
-          password,
-          role,
-          department: role === 'teacher' ? department : null,
-          course: role === 'teacher' ? courseId : null,
-          year: role === 'teacher' ? Number(year) : null,
-          teachingYears: role === 'teacher' ? teachingYears : undefined,
-          assignedBatches: role === 'hod' || role === 'teacher' ? assignedBatches : [],
-          batches: role === 'hod' ? assignedBatches : [],
-          employeeId,
-          phone: formattedPhone,
-        });
+        await api.post('/admin/users', payload);
         showToast('User account created successfully', 'success');
       }
       setIsModalOpen(false);
@@ -222,7 +222,7 @@ export const AdminUsers: React.FC = () => {
   const maxYearsForCourse = selectedCourseObj ? selectedCourseObj.durationYears : 4;
   const courseYearsArray = Array.from({ length: maxYearsForCourse }, (_, i) => i + 1);
 
-  const unassignedHodsCount = users.filter((u) => u.role === 'hod' && (!u.assignedBatches || u.assignedBatches.length === 0) && (!(u as any).batches || (u as any).batches.length === 0)).length;
+  const unassignedHodsCount = users.filter((u) => u.role === 'hod' && (!u.session || !u.course || !u.year)).length;
 
   const invalidPhoneUsers = users.filter((u) => u.phone && !/^\+91[6-9]\d{9}$/.test(u.phone));
 
@@ -267,61 +267,42 @@ export const AdminUsers: React.FC = () => {
       render: (row) => <StatusPill status={row.role} />,
     },
     {
-      header: 'Scope / Department / Managed Batches',
+      header: 'Scope / Assignment',
       render: (row) => {
         if (row.role === 'admin') {
           return <span className="text-xs text-slate-500 italic">Institution Wide</span>;
         }
         if (row.role === 'hod') {
-          const assignedBatchList = row.assignedBatches || (row as any).batches || [];
-          if (assignedBatchList.length === 0) {
+          const hSession = typeof row.session === 'object' && row.session ? row.session : sessions.find((s) => s._id === (row.session as any));
+          const hCourse = typeof row.course === 'object' && row.course ? row.course : courses.find((c) => c._id === (row.course as any));
+          const isUnassigned = !hSession || !hCourse || !row.year;
+          if (isUnassigned) {
             return (
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold">
                 <AlertTriangle className="w-3 h-3" />
-                <span>No Batches Assigned (HOD)</span>
+                <span>Incomplete Assignment (HOD)</span>
               </span>
             );
           }
           return (
             <div className="flex items-center gap-1.5 flex-wrap">
-              {assignedBatchList.map((b: any) => {
-                const bName = typeof b === 'object' && b ? b.name : b;
-                return (
-                  <span
-                    key={typeof b === 'object' ? b._id : b}
-                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-xs font-semibold"
-                  >
-                    <School className="w-3 h-3 text-purple-600" />
-                    <span>{bName} Cohort</span>
-                  </span>
-                );
-              })}
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-xs font-semibold">
+                <School className="w-3 h-3 text-purple-600" />
+                <span>{formatYearLabel(row.year)} {hCourse.code || hCourse.name} HOD</span>
+              </span>
+              <span className="text-[11px] font-mono font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200">
+                {hSession.year} ({hSession.semesterLabel})
+              </span>
             </div>
           );
         }
         const d = row.department as Department;
         const dCourse = typeof d?.course === 'object' && d?.course ? d.course : null;
-        const assignedBatchList = row.assignedBatches || [];
         return (
           <div className="space-y-1">
             <span className="text-xs text-slate-700 font-medium block">
               {d?.name || '—'} {d?.code ? `(${d.code})` : ''} {dCourse ? `· ${dCourse.code}` : ''}
             </span>
-            {assignedBatchList.length > 0 && (
-              <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                {assignedBatchList.map((b: any) => {
-                  const bName = typeof b === 'object' && b ? b.name : b;
-                  return (
-                    <span
-                      key={typeof b === 'object' ? b._id : b}
-                      className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200"
-                    >
-                      {bName}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
           </div>
         );
       },
@@ -333,10 +314,9 @@ export const AdminUsers: React.FC = () => {
           return <span className="text-xs text-slate-400 italic">Institution Wide</span>;
         }
         if (row.role === 'hod') {
-          const bList = row.assignedBatches || (row as any).batches || [];
           return (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 text-xs font-semibold">
-              HOD ({bList.length} Managed Cohort{bList.length !== 1 ? 's' : ''})
+              {formatYearLabel(row.year)} HOD
             </span>
           );
         }
@@ -449,10 +429,10 @@ export const AdminUsers: React.FC = () => {
           <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div className="text-xs space-y-1">
             <p className="font-semibold text-amber-900">
-              Notice: {unassignedHodsCount} HOD account(s) are missing assigned batch cohorts.
+              Notice: {unassignedHodsCount} HOD account(s) are missing assigned Academic Session, Course, or Year.
             </p>
             <p className="text-amber-700">
-              Please click "Edit" on each unassigned HOD below and select at least one managed batch cohort to restore proper scoped governance.
+              Please click "Edit" on each unassigned HOD below and select their Academic Session, Course Program, and Academic Year.
             </p>
           </div>
         </div>
@@ -669,7 +649,7 @@ export const AdminUsers: React.FC = () => {
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
             >
               <option value="teacher">Subject Teacher</option>
-              <option value="hod">HOD (Head of Department - Managed Batches)</option>
+              <option value="hod">HOD (Course & Year Head of Department)</option>
               <option value="admin">System Administrator</option>
             </select>
           </div>
@@ -679,18 +659,18 @@ export const AdminUsers: React.FC = () => {
             role={role}
             courses={courses}
             departments={departments}
+            sessions={sessions}
             users={users}
-            batches={batches}
             courseId={courseId}
             setCourseId={setCourseId}
             departmentId={department}
             setDepartmentId={setDepartment}
             year={year}
             setYear={setYear}
+            sessionId={sessionId}
+            setSessionId={setSessionId}
             teachingYears={teachingYears}
             setTeachingYears={setTeachingYears}
-            assignedBatches={assignedBatches}
-            setAssignedBatches={setAssignedBatches}
             editingUserId={editingUser?._id}
           />
 

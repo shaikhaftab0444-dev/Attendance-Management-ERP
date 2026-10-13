@@ -8,7 +8,7 @@ import {
   TrendingDown,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { TeacherSubjectAssignment, DefaulterRecord, DefaulterResponse, Batch } from '../../types';
+import { TeacherSubjectAssignment, DefaulterRecord, DefaulterResponse } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { StatCard } from '../../components/ui/StatCard';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
@@ -18,10 +18,8 @@ export const TeacherDefaulters: React.FC = () => {
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
   const [month, setMonth] = useState<string>(currentMonth);
   const [subject, setSubject] = useState<string>('');
-  const [batch, setBatch] = useState<string>('');
 
   const [assignments, setAssignments] = useState<TeacherSubjectAssignment[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [data, setData] = useState<DefaulterResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -29,12 +27,8 @@ export const TeacherDefaulters: React.FC = () => {
 
   const fetchDropdownData = async () => {
     try {
-      const [subRes, batchRes] = await Promise.all([
-        api.get('/teacher/subjects'),
-        api.get('/teacher/batches'),
-      ]);
+      const subRes = await api.get('/teacher/subjects');
       setAssignments(subRes.data);
-      setBatches(batchRes.data);
       if (subRes.data[0]?.subject?._id) {
         setSubject(subRes.data[0].subject._id);
       }
@@ -48,7 +42,6 @@ export const TeacherDefaulters: React.FC = () => {
     try {
       setIsLoading(true);
       const params: any = { month, subject };
-      if (batch) params.batch = batch;
       const res = await api.get('/teacher/defaulters', { params });
       setData(res.data);
     } catch (err: any) {
@@ -66,7 +59,7 @@ export const TeacherDefaulters: React.FC = () => {
     if (subject) {
       fetchDefaulters();
     }
-  }, [month, subject, batch]);
+  }, [month, subject]);
 
   // Extract distinct subjects
   const distinctSubjects = Array.from(
@@ -181,13 +174,13 @@ export const TeacherDefaulters: React.FC = () => {
             entityName="Subject Defaulters"
             pdfExportUrl="/teacher/defaulters/export-pdf"
             pdfFilename={`Subject_Defaulters_${month}.pdf`}
-            queryParams={{ month, ...(subject ? { subject } : {}), ...(batch ? { batch } : {}) }}
+            queryParams={{ month, ...(subject ? { subject } : {}) }}
           />
         </div>
       </div>
 
       {/* Filter Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm max-w-3xl">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm max-w-2xl">
         <div>
           <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
             <Calendar className="w-3.5 h-3.5 text-teal-600" />
@@ -215,25 +208,6 @@ export const TeacherDefaulters: React.FC = () => {
             {distinctSubjects.map((s: any) => (
               <option key={s._id} value={s._id}>
                 {s.name} ({s.code})
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label className="block text-[11px] font-semibold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Cohort Batch</span>
-          </label>
-          <select
-            value={batch}
-            onChange={(e) => setBatch(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-teal-500"
-          >
-            <option value="">All Batches</option>
-            {batches.map((b) => (
-              <option key={b._id} value={b._id}>
-                {b.name} {!b.isActive ? '(Archived)' : ''}
               </option>
             ))}
           </select>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BookOpen, Building2, Layers, Plus, Edit2, Trash2, AlertTriangle, GraduationCap, Archive, ArchiveRestore } from 'lucide-react';
 import api from '../../lib/api';
-import { Subject, Department, Batch, User } from '../../types';
+import { Subject, Department, User } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -12,14 +12,12 @@ export const HodSubjects: React.FC = () => {
   const { user } = useAuth();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filters
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [semFilter, setSemFilter] = useState<string>('all');
-  const [batchFilter, setBatchFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<'active' | 'archived' | 'all'>('active');
 
   // Modal state
@@ -30,7 +28,6 @@ export const HodSubjects: React.FC = () => {
   const [department, setDepartment] = useState('');
   const [semester, setSemester] = useState<number>(1);
   const [credits, setCredits] = useState<number>(3);
-  const [modalBatch, setModalBatch] = useState<string>('');
   const [modalTeacher, setModalTeacher] = useState<string>('');
   const [isActive, setIsActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -63,22 +60,19 @@ export const HodSubjects: React.FC = () => {
       const params: any = {};
       if (deptFilter !== 'all') params.department = deptFilter;
       if (semFilter !== 'all') params.semester = semFilter;
-      if (batchFilter !== 'all') params.batch = batchFilter;
       if (statusFilter !== 'all') {
         params.isActive = statusFilter;
       } else {
         params.includeArchived = 'true';
       }
 
-      const [subRes, deptRes, batchRes, tchRes] = await Promise.all([
+      const [subRes, deptRes, tchRes] = await Promise.all([
         api.get('/hod/subjects', { params }),
         api.get('/hod/departments'),
-        api.get('/hod/batches'),
         api.get('/hod/teacher-directory'),
       ]);
       setSubjects(subRes.data);
       setDepartments(deptRes.data);
-      setBatches(batchRes.data);
       setTeachers(tchRes.data);
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching subjects', 'error');
@@ -89,7 +83,7 @@ export const HodSubjects: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [deptFilter, semFilter, batchFilter, statusFilter]);
+  }, [deptFilter, semFilter, statusFilter]);
 
   const openCreateModal = () => {
     setEditingSubject(null);
@@ -98,7 +92,6 @@ export const HodSubjects: React.FC = () => {
     setDepartment(departments[0]?._id || '');
     setSemester(availableSemesters[0]);
     setCredits(3);
-    setModalBatch('');
     setModalTeacher('');
     setIsActive(true);
     setIsModalOpen(true);
@@ -111,7 +104,6 @@ export const HodSubjects: React.FC = () => {
     setDepartment((sub.department as Department)?._id || (sub.department as string) || '');
     setSemester(sub.semester || availableSemesters[0]);
     setCredits(sub.credits || 3);
-    setModalBatch((sub.batch as Batch)?._id || (sub.batch as string) || '');
     setModalTeacher((sub.assignedTeacher as User)?._id || (sub.assignedTeacher as string) || '');
     setIsActive(sub.isActive !== false);
     setIsModalOpen(true);
@@ -136,7 +128,6 @@ export const HodSubjects: React.FC = () => {
         department,
         semester: Number(semester),
         credits: Number(credits),
-        batch: modalBatch || null,
         teacher: modalTeacher || null,
       };
 
@@ -274,20 +265,6 @@ export const HodSubjects: React.FC = () => {
       ),
     },
     {
-      header: 'Batch Cohort',
-      render: (row) => {
-        const b = row.batch as Batch;
-        return b ? (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-indigo-50 border border-indigo-200 text-xs text-indigo-700 font-semibold shadow-sm">
-            <Layers className="w-3.5 h-3.5 text-indigo-600" />
-            <span>{b.name}</span>
-          </span>
-        ) : (
-          <span className="text-xs text-slate-400 italic">All Cohorts</span>
-        );
-      },
-    },
-    {
       header: 'Status',
       render: (row) => <StatusPill status={row.isActive !== false ? 'active' : 'inactive'} />,
     },
@@ -383,25 +360,6 @@ export const HodSubjects: React.FC = () => {
             </select>
           </div>
 
-          {/* Batch Filter */}
-          {batches.length > 0 && (
-            <div className="flex items-center gap-2 p-2 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
-              <Layers className="w-4 h-4 text-indigo-600" />
-              <select
-                value={batchFilter}
-                onChange={(e) => setBatchFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500"
-              >
-                <option value="all">All Cohorts</option>
-                {batches.map((b) => (
-                  <option key={b._id} value={b._id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
           {/* Status Filter */}
           <div className="flex items-center gap-2 p-2 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
             <select
@@ -433,8 +391,7 @@ export const HodSubjects: React.FC = () => {
         searchFilter={(row, q) =>
           row.name.toLowerCase().includes(q) ||
           row.code.toLowerCase().includes(q) ||
-          ((row.department as Department)?.name?.toLowerCase().includes(q) ?? false) ||
-          ((row.batch as Batch)?.name?.toLowerCase().includes(q) ?? false)
+          ((row.department as Department)?.name?.toLowerCase().includes(q) ?? false)
         }
       />
 
@@ -514,38 +471,18 @@ export const HodSubjects: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                Academic Credits
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={10}
-                value={credits}
-                onChange={(e) => setCredits(Number(e.target.value))}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
-                Target Batch Cohort
-              </label>
-              <select
-                value={modalBatch}
-                onChange={(e) => setModalBatch(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10"
-              >
-                <option value="">All Cohorts (Universal)</option>
-                {batches.map((b) => (
-                  <option key={b._id} value={b._id}>
-                    {b.name} ({b.startYear}-{b.endYear})
-                  </option>
-                ))}
-              </select>
-            </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2">
+              Academic Credits
+            </label>
+            <input
+              type="number"
+              min={1}
+              max={10}
+              value={credits}
+              onChange={(e) => setCredits(Number(e.target.value))}
+              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10"
+            />
           </div>
 
           {!editingSubject && (

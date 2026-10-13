@@ -48,18 +48,11 @@ const userSchema = new mongoose.Schema({
     ],
     default: undefined,
   },
-  assignedBatches: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Batch',
-    },
-  ],
-  batches: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Batch',
-    },
-  ],
+  session: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'AcademicSession',
+    default: null,
+  },
   employeeId: {
     type: String,
     trim: true,

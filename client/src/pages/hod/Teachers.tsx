@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Users, Mail, Phone, Building2, Plus, Edit2, Trash2, Eye, EyeOff, AlertTriangle, Layers } from 'lucide-react';
 import api from '../../lib/api';
-import { User, TeacherSubjectAssignment, Department, Batch } from '../../types';
+import { User, TeacherSubjectAssignment, Department } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -14,10 +14,8 @@ export const HodTeachers: React.FC = () => {
   const { user } = useAuth();
   const [teachers, setTeachers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [assignments, setAssignments] = useState<TeacherSubjectAssignment[]>([]);
   const [deptFilter, setDeptFilter] = useState<string>('all');
-  const [batchFilter, setBatchFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
 
   // Modal State
@@ -30,7 +28,6 @@ export const HodTeachers: React.FC = () => {
   const [department, setDepartment] = useState('');
   const [employeeId, setEmployeeId] = useState('');
   const [phone, setPhone] = useState('');
-  const [assignedBatches, setAssignedBatches] = useState<string[]>([]);
   const [isActive, setIsActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -52,16 +49,14 @@ export const HodTeachers: React.FC = () => {
       const params: any = {};
       if (deptFilter !== 'all') params.department = deptFilter;
 
-      const [tchRes, asgnRes, deptRes, batchRes] = await Promise.all([
+      const [tchRes, asgnRes, deptRes] = await Promise.all([
         api.get('/hod/teachers', { params }),
         api.get('/hod/teacher-subjects', { params }),
         api.get('/hod/departments'),
-        api.get('/hod/batches'),
       ]);
       setTeachers(tchRes.data);
       setAssignments(asgnRes.data);
       setDepartments(deptRes.data);
-      setBatches(batchRes.data);
     } catch (err: any) {
       showToast(err.customMessage || 'Error fetching year faculty', 'error');
     } finally {
@@ -82,7 +77,6 @@ export const HodTeachers: React.FC = () => {
     setDepartment(departments[0]?._id || '');
     setEmployeeId('');
     setPhone('');
-    setAssignedBatches([]);
     setIsActive(true);
     setIsModalOpen(true);
   };
@@ -96,17 +90,8 @@ export const HodTeachers: React.FC = () => {
     setDepartment((t.department as Department)?._id || (t.department as string) || '');
     setEmployeeId(t.employeeId || '');
     setPhone(extractPhoneDigits(t.phone));
-    setAssignedBatches((t.assignedBatches || []).map((b: any) => (typeof b === 'object' && b ? b._id : b)));
     setIsActive(t.isActive);
     setIsModalOpen(true);
-  };
-
-  const toggleBatch = (bId: string) => {
-    if (assignedBatches.includes(bId)) {
-      setAssignedBatches(assignedBatches.filter((id) => id !== bId));
-    } else {
-      setAssignedBatches([...assignedBatches, bId]);
-    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -136,7 +121,6 @@ export const HodTeachers: React.FC = () => {
         department,
         employeeId: employeeId.trim(),
         phone: phone ? `+91${phone.trim()}` : '',
-        assignedBatches,
       };
 
       if (password.trim()) {
@@ -176,13 +160,6 @@ export const HodTeachers: React.FC = () => {
     }
   };
 
-  // Filter teachers by batch if batchFilter is selected
-  const filteredTeachers = teachers.filter((t) => {
-    if (batchFilter === 'all') return true;
-    const tBatches = (t.assignedBatches || []).map((b: any) => (typeof b === 'object' && b ? b._id : b));
-    return tBatches.includes(batchFilter);
-  });
-
   const columns: Column<User>[] = [
     {
       header: 'Faculty Member',
@@ -212,27 +189,6 @@ export const HodTeachers: React.FC = () => {
           </span>
         ) : (
           <span className="text-xs text-slate-400 italic">Campus Faculty</span>
-        );
-      },
-    },
-    {
-      header: 'Assigned Batches',
-      render: (row) => {
-        const rowBatches = row.assignedBatches as Batch[];
-        if (!rowBatches || rowBatches.length === 0) {
-          return <span className="text-xs text-slate-400 italic">All Batches</span>;
-        }
-        return (
-          <div className="flex flex-wrap gap-1">
-            {rowBatches.map((b: any) => (
-              <span
-                key={typeof b === 'object' ? b._id : b}
-                className="px-2 py-0.5 rounded-lg bg-indigo-50 border border-indigo-200 text-[11px] text-indigo-700 font-semibold shadow-sm"
-              >
-                {typeof b === 'object' ? b.name : 'Batch'}
-              </span>
-            ))}
-          </div>
         );
       },
     },
@@ -333,25 +289,6 @@ export const HodTeachers: React.FC = () => {
             </select>
           </div>
 
-          {/* Batch Filter */}
-          {batches.length > 0 && (
-            <div className="flex items-center gap-2 p-2 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
-              <Layers className="w-4 h-4 text-indigo-600" />
-              <select
-                value={batchFilter}
-                onChange={(e) => setBatchFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500"
-              >
-                <option value="all">All Cohort Batches</option>
-                {batches.map((b) => (
-                  <option key={b._id} value={b._id}>
-                    {b.name} ({b.startYear}-{b.endYear})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
           <button
             onClick={openCreateModal}
             className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-all cursor-pointer"
@@ -371,7 +308,7 @@ export const HodTeachers: React.FC = () => {
 
       <DataTable
         columns={columns}
-        data={filteredTeachers}
+        data={teachers}
         isLoading={isLoading}
         searchPlaceholder="Search faculty by name, email, or employee ID..."
         searchFilter={(row, q) =>
@@ -484,52 +421,6 @@ export const HodTeachers: React.FC = () => {
               placeholder="9876543210"
             />
           </div>
-
-          {/* Assigned Batches Multi-Select */}
-          {batches.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                  <Layers className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Assigned Cohort Batches</span>
-                </label>
-                <span className="text-[11px] text-slate-500 font-medium">
-                  {assignedBatches.length === 0 ? (
-                    <span className="text-slate-500">All Course Batches (Default)</span>
-                  ) : (
-                    `${assignedBatches.length} batch${assignedBatches.length > 1 ? 'es' : ''} mapped`
-                  )}
-                </span>
-              </div>
-
-              <div className="flex items-center gap-2 flex-wrap p-3 bg-slate-50 rounded-xl border border-slate-200">
-                {batches.map((b) => {
-                  const isSelected = assignedBatches.includes(b._id);
-                  return (
-                    <button
-                      key={b._id}
-                      type="button"
-                      onClick={() => toggleBatch(b._id)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer select-none ${
-                        isSelected
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm shadow-indigo-500/20'
-                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      <span
-                        className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] ${
-                          isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                        }`}
-                      >
-                        {isSelected ? '✓' : '+'}
-                      </span>
-                      <span>{b.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
           {editingTeacher && (
             <div className="flex items-center gap-3 pt-2">

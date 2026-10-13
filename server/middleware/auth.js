@@ -19,8 +19,7 @@ const auth = async (req, res, next) => {
     const user = await User.findById(decoded.userId)
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('course')
-      .populate({ path: 'assignedBatches', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate({ path: 'batches', populate: { path: 'course', select: 'name code durationYears' } });
+      .populate('session');
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'User account not found or deactivated.' });
     }

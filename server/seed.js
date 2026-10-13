@@ -14,7 +14,6 @@ const Section = require('./models/Section');
 const Subject = require('./models/Subject');
 const TeacherSubject = require('./models/TeacherSubject');
 const Student = require('./models/Student');
-const Batch = require('./models/Batch');
 const PeriodSlot = require('./models/PeriodSlot');
 const Attendance = require('./models/Attendance');
 const Setting = require('./models/Setting');
@@ -160,79 +159,30 @@ const seedDatabase = async () => {
       }
     }
 
-    // Ensure default Batches exist
-    let batchBTech2024 = await Batch.findOne({ course: btech._id, name: '2024-2028' });
-    if (!batchBTech2024) {
-      batchBTech2024 = await Batch.create({
-        name: '2024-2028',
-        course: btech._id,
-        startYear: 2024,
-        endYear: 2028,
-        isActive: true,
-      });
-      console.log('Default Batch created: B.Tech 2024-2028');
-    }
-
-    let batchBTech2023 = await Batch.findOne({ course: btech._id, name: '2023-2027' });
-    if (!batchBTech2023) {
-      batchBTech2023 = await Batch.create({
-        name: '2023-2027',
-        course: btech._id,
-        startYear: 2023,
-        endYear: 2027,
-        isActive: true,
-      });
-      console.log('Default Batch created: B.Tech 2023-2027');
-    }
-
-    let batchDiploma2024 = await Batch.findOne({ course: diploma._id, name: '2024-2027' });
-    if (!batchDiploma2024) {
-      batchDiploma2024 = await Batch.create({
-        name: '2024-2027',
-        course: diploma._id,
-        startYear: 2024,
-        endYear: 2027,
-        isActive: true,
-      });
-      console.log('Default Batch created: Diploma 2024-2027');
-    }
-
-    // Migration Check: Check for any existing Students missing a batch
-    const studentsMissingBatch = await Student.find({
-      $or: [{ batch: { $exists: false } }, { batch: null }],
+    // Migration Check: Ensure all students have course and admissionYear
+    const studentsMissingFields = await Student.find({
+      $or: [
+        { course: { $exists: false } },
+        { course: null },
+        { admissionYear: { $exists: false } },
+        { admissionYear: null },
+      ],
     }).populate({ path: 'department', populate: { path: 'course' } });
 
-    if (studentsMissingBatch.length > 0) {
-      console.warn(`\n⚠️ [MIGRATION WARNING] Found ${studentsMissingBatch.length} Student(s) missing an assigned Batch:`);
-      for (const st of studentsMissingBatch) {
-        const isDiploma = st.department?.course?.code === 'DIPLOMA';
-        if (isDiploma) {
-          st.batch = batchDiploma2024._id;
-        } else {
-          st.batch = st.year === 1 ? batchBTech2024._id : batchBTech2023._id;
+    if (studentsMissingFields.length > 0) {
+      console.warn(`\n⚠️ [MIGRATION] Backfilling course & admissionYear for ${studentsMissingFields.length} Student(s):`);
+      const currentYear = new Date().getFullYear();
+      for (const st of studentsMissingFields) {
+        if (!st.course) {
+          st.course = st.department?.course?._id || btech._id;
+        }
+        if (!st.admissionYear) {
+          const yr = st.year || 1;
+          st.admissionYear = currentYear - (yr - 1);
         }
         await st.save();
       }
-      console.warn(`   --> Auto-assigned missing batches for ${studentsMissingBatch.length} student(s).`);
-    }
-
-    // Migration Check: Check for any existing Sections missing a batch
-    const sectionsMissingBatch = await Section.find({
-      $or: [{ batch: { $exists: false } }, { batch: null }],
-    }).populate({ path: 'department', populate: { path: 'course' } });
-
-    if (sectionsMissingBatch.length > 0) {
-      console.warn(`\n⚠️ [MIGRATION WARNING] Found ${sectionsMissingBatch.length} Section(s) missing an assigned Batch:`);
-      for (const sec of sectionsMissingBatch) {
-        const isDiploma = sec.department?.course?.code === 'DIPLOMA';
-        if (isDiploma) {
-          sec.batch = batchDiploma2024._id;
-        } else {
-          sec.batch = sec.year === 1 ? batchBTech2024._id : batchBTech2023._id;
-        }
-        await sec.save();
-      }
-      console.warn(`   --> Auto-assigned missing batches for ${sectionsMissingBatch.length} section(s).`);
+      console.warn(`   --> Successfully backfilled course and admissionYear for ${studentsMissingFields.length} student(s).`);
     }
 
     // Check if other entities exist; if already seeded, ensure attendance records exist

@@ -3,7 +3,6 @@ const TeacherSubject = require('../models/TeacherSubject');
 const Attendance = require('../models/Attendance');
 const Student = require('../models/Student');
 const Setting = require('../models/Setting');
-const Batch = require('../models/Batch');
 const User = require('../models/User');
 const Department = require('../models/Department');
 const { calculateAttendancePercentage, normalizeDate } = require('../utils/helpers');
@@ -20,27 +19,17 @@ const getTodayTimetable = async (req, res) => {
     const dayOfWeek = now.getDay();
     const todayNormalized = normalizeDate(now);
 
-    const rawSlots = await PeriodSlot.find({ teacher: teacherId, dayOfWeek, isRecess: { $ne: true } })
+    const slots = await PeriodSlot.find({ teacher: teacherId, dayOfWeek, isRecess: { $ne: true } })
       .populate({
         path: 'section',
-        select: 'name semester year department batch',
+        select: 'name semester year department',
         populate: [
           { path: 'department', select: 'name code course' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
         ],
       })
-      .populate('batch', 'name startYear endYear isActive')
       .populate('subject', 'name code credits')
       .populate('session', 'year semesterLabel isActive')
       .sort({ periodNumber: 1 });
-
-    // Filter out inactive/archived batches for daily live attendance
-    const slots = rawSlots.filter((slot) => {
-      if (slot.section?.batch && slot.section.batch.isActive === false) {
-        return false;
-      }
-      return true;
-    });
 
     const settings = await Setting.findOne();
     const editWindowHours = settings?.allowTeacherEditHours ?? settings?.editWindowHours ?? 24;
@@ -105,26 +94,17 @@ const getTodayTimetable = async (req, res) => {
 const getWeeklyTimetable = async (req, res) => {
   try {
     const teacherId = req.user._id;
-    const rawSlots = await PeriodSlot.find({ teacher: teacherId })
+    const slots = await PeriodSlot.find({ teacher: teacherId })
       .populate({
         path: 'section',
-        select: 'name semester year department batch',
+        select: 'name semester year department',
         populate: [
           { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
         ],
       })
-      .populate('batch', 'name startYear endYear isActive')
       .populate('subject', 'name code')
       .populate('session', 'year semesterLabel')
       .sort({ dayOfWeek: 1, periodNumber: 1 });
-
-    const slots = rawSlots.filter((slot) => {
-      if (slot.section?.batch && slot.section.batch.isActive === false) {
-        return false;
-      }
-      return true;
-    });
 
     return res.status(200).json(slots);
   } catch (error) {
@@ -163,13 +143,11 @@ const getPeriodRoster = async (req, res) => {
     const slot = await PeriodSlot.findById(periodSlotId)
       .populate({
         path: 'section',
-        select: 'name semester year department batch',
+        select: 'name semester year department',
         populate: [
           { path: 'department', select: 'name code course' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
         ],
       })
-      .populate('batch', 'name startYear endYear isActive')
       .populate('subject', 'name code')
       .populate('session', 'year semesterLabel');
 
@@ -234,18 +212,13 @@ const markAttendance = async (req, res) => {
 
     const slot = await PeriodSlot.findById(periodSlotId).populate({
       path: 'section',
-      select: 'department batch',
+      select: 'department',
       populate: [
         { path: 'department', select: 'course' },
-        { path: 'batch', select: 'name isActive' },
       ],
     });
     if (!slot) {
       return res.status(404).json({ message: 'Period slot not found.' });
-    }
-
-    if (slot.section?.batch && slot.section.batch.isActive === false) {
-      return res.status(400).json({ message: `Cannot mark attendance for archived or inactive batch '${slot.section.batch.name}'.` });
     }
 
     if (slot.teacher.toString() !== teacherId.toString()) {
@@ -482,10 +455,10 @@ const getMyReports = async (req, res) => {
 const getTeacherDefaulters = async (req, res) => {
   try {
     const teacherId = req.user._id;
-    const { subject, month, startDate, endDate, batch, batchId } = req.query;
+    const { subject, month, startDate, endDate } = req.query;
 
-    if (!subject && !batch && !batchId) {
-      return res.status(400).json({ message: 'Subject or Batch query parameter is required.' });
+    if (!subject) {
+      return res.status(400).json({ message: 'Subject query parameter is required.' });
     }
 
     let sectionIds = [];
@@ -503,8 +476,7 @@ const getTeacherDefaulters = async (req, res) => {
       startDate,
       endDate,
       subjectId: subject || null,
-      batchId: batchId || batch || null,
-      mode: subject ? 'subject' : 'overall',
+      mode: 'subject',
     });
 
     if (sectionIds.length > 0) {
@@ -710,7 +682,7 @@ const exportTeacherDefaultersPdf = async (req, res) => {
   try {
     const teacher = req.user;
     const teacherId = req.user._id;
-    let { subject, month, startDate, endDate, batch, batchId } = req.query;
+    let { subject, month, startDate, endDate } = req.query;
 
     const settings = await Setting.findOne();
     const institutionName = settings?.institutionName || settings?.collegeName || 'Everest College';
@@ -740,8 +712,7 @@ const exportTeacherDefaultersPdf = async (req, res) => {
       startDate,
       endDate,
       subjectId: subject || null,
-      batchId: batchId || batch || null,
-      mode: subject ? 'subject' : 'overall',
+      mode: 'subject',
       threshold,
     });
 
@@ -752,17 +723,10 @@ const exportTeacherDefaultersPdf = async (req, res) => {
       filteredDefaulters = filteredDefaulters.filter((d) => studentIdSet.has(d.studentId));
     }
 
-    let batchLabel = '';
-    if (batch || batchId) {
-      const bDoc = await Batch.findById(batchId || batch);
-      if (bDoc) batchLabel = bDoc.name;
-    }
-
     const rows = filteredDefaulters.map((d) => ({
       rollNumber: d.rollNumber || 'N/A',
       name: d.name || 'N/A',
       section: d.section || d.sectionName || 'N/A',
-      batch: d.batchName || batchLabel || '—',
       attended: `${d.present != null ? d.present : (d.attended != null ? d.attended : 'N/A')} / ${d.totalPeriods != null ? d.totalPeriods : 'N/A'}`,
       percentage: `${d.percentage != null && !isNaN(d.percentage) ? d.percentage : 'N/A'}%`,
     }));
@@ -779,14 +743,12 @@ const exportTeacherDefaultersPdf = async (req, res) => {
         Faculty: `${teacher.name} (${teacher.employeeId || teacher.email})`,
         Subject: `${subjectName} (${subjectCode})`,
         'Date Range': dateFilterLabel,
-        ...(batchLabel ? { Batch: batchLabel } : {}),
         Threshold: `${data.thresholdPercent || threshold}%`,
       },
       columns: [
         { header: 'Roll No', key: 'rollNumber', align: 'center' },
         { header: 'Student Name', key: 'name' },
         { header: 'Section', key: 'section', align: 'center' },
-        { header: 'Batch', key: 'batch', align: 'center' },
         { header: 'Attended / Total', key: 'attended', align: 'center' },
         {
           header: 'Attendance %',
@@ -807,39 +769,6 @@ const exportTeacherDefaultersPdf = async (req, res) => {
   }
 };
 
-// GET /api/teacher/batches
-const getMyBatches = async (req, res) => {
-  try {
-    const teacherId = req.user._id;
-    const user = await User.findById(teacherId)
-      .populate({
-        path: 'assignedBatches',
-        populate: { path: 'course', select: 'name code durationYears' },
-      })
-      .populate({
-        path: 'department',
-        populate: { path: 'course', select: 'name code durationYears' },
-      });
-
-    if (user && user.assignedBatches && user.assignedBatches.length > 0) {
-      return res.status(200).json(user.assignedBatches);
-    }
-
-    if (user?.department?.course) {
-      const courseId = user.department.course._id || user.department.course;
-      const batches = await Batch.find({ course: courseId, isActive: true })
-        .populate('course', 'name code durationYears')
-        .sort({ startYear: -1 });
-      return res.status(200).json(batches);
-    }
-
-    return res.status(200).json([]);
-  } catch (error) {
-    console.error('getMyBatches error:', error);
-    return res.status(500).json({ message: 'Error fetching teacher batches', error: error.message });
-  }
-};
-
 module.exports = {
   getTodayTimetable,
   getWeeklyTimetable,
@@ -849,7 +778,6 @@ module.exports = {
   updateAttendance,
   getMyReports,
   getTeacherDefaulters,
-  getMyBatches,
   exportTeacherReportsPdf,
   exportTeacherTimetablePdf,
   exportTeacherDefaultersPdf,

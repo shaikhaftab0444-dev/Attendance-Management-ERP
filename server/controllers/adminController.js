@@ -14,7 +14,6 @@ const Setting = require('../models/Setting');
 const Holiday = require('../models/Holiday');
 const TeacherSubject = require('../models/TeacherSubject');
 const PeriodTemplate = require('../models/PeriodTemplate');
-const Batch = require('../models/Batch');
 const { calculateAttendancePercentage, normalizeDate, parseStudentCsv } = require('../utils/helpers');
 const { calculateDefaulters } = require('../utils/defaulterAggregation');
 const { parseCsv, toCsv } = require('../utils/csv');
@@ -475,353 +474,7 @@ const exportDepartmentsPdf = async (req, res) => {
   }
 };
 
-// ==================== BATCHES ====================
-const createBatch = async (req, res) => {
-  try {
-    const { name, course, startYear, endYear, isActive, assignedTeachers } = req.body;
-    if (!course || !startYear) {
-      return res.status(400).json({ message: 'Course and Start Year are required.' });
-    }
-    const courseDoc = await Course.findById(course);
-    if (!courseDoc) {
-      return res.status(404).json({ message: 'Course not found.' });
-    }
-    const sYear = Number(startYear);
-    const eYear = endYear ? Number(endYear) : (sYear + (courseDoc.durationYears || 4));
-    const batchName = name ? name.trim() : `${sYear}-${eYear}`;
 
-    const existing = await Batch.findOne({ course, name: batchName });
-    if (existing) {
-      return res.status(409).json({ message: `Batch '${batchName}' already exists for this course.` });
-    }
-
-    const teacherIds = Array.isArray(assignedTeachers)
-      ? assignedTeachers.filter((t) => mongoose.Types.ObjectId.isValid(t))
-      : [];
-
-    const batch = new Batch({
-      name: batchName,
-      course,
-      startYear: sYear,
-      endYear: eYear,
-      isActive: isActive !== undefined ? isActive : true,
-      assignedTeachers: teacherIds,
-    });
-    await batch.save();
-
-    // Synchronize with Users
-    if (teacherIds.length > 0) {
-      await User.updateMany(
-        { _id: { $in: teacherIds } },
-        { $addToSet: { assignedBatches: batch._id, batches: batch._id } }
-      );
-    }
-
-    const populated = await Batch.findById(batch._id)
-      .populate('course', 'name code durationYears')
-      .populate('assignedTeachers', 'name email employeeId phone');
-    return res.status(201).json(populated);
-  } catch (error) {
-    console.error('createBatch error:', error);
-    return res.status(500).json({ message: 'Error creating batch', error: error.message });
-  }
-};
-
-const getBatches = async (req, res) => {
-  try {
-    const { course, isActive } = req.query;
-    const filter = {};
-    if (isActive !== undefined && isActive !== 'all') {
-      filter.isActive = isActive === 'true' || isActive === true;
-    }
-    if (course) {
-      const courseDoc = mongoose.Types.ObjectId.isValid(course)
-        ? await Course.findById(course)
-        : await Course.findOne({ code: course.toUpperCase().trim() });
-      if (courseDoc) {
-        filter.course = courseDoc._id;
-      }
-    }
-
-    const batches = await Batch.find(filter)
-      .populate('course', 'name code durationYears')
-      .populate('assignedTeachers', 'name email employeeId phone')
-      .sort({ startYear: -1, name: 1 });
-
-    const batchIds = batches.map((b) => b._id);
-    const counts = await Student.aggregate([
-      { $match: { batch: { $in: batchIds }, isActive: { $ne: false } } },
-      { $group: { _id: '$batch', count: { $sum: 1 } } },
-    ]);
-    const countMap = new Map();
-    counts.forEach((c) => countMap.set(c._id.toString(), c.count));
-
-    const result = batches.map((b) => {
-      const obj = b.toObject();
-      obj.studentCount = countMap.get(b._id.toString()) || 0;
-      return obj;
-    });
-
-    return res.status(200).json(result);
-  } catch (error) {
-    console.error('getBatches error:', error);
-    return res.status(500).json({ message: 'Error fetching batches', error: error.message });
-  }
-};
-
-const updateBatch = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, course, startYear, endYear, isActive, assignedTeachers } = req.body;
-
-    const batch = await Batch.findById(id);
-    if (!batch) {
-      return res.status(404).json({ message: 'Batch not found.' });
-    }
-
-    if (course) batch.course = course;
-    if (startYear) batch.startYear = Number(startYear);
-    if (endYear) batch.endYear = Number(endYear);
-    if (name) batch.name = name.trim();
-    if (isActive !== undefined) batch.isActive = isActive;
-
-    let newTeacherIds = null;
-    if (assignedTeachers !== undefined) {
-      newTeacherIds = Array.isArray(assignedTeachers)
-        ? assignedTeachers.filter((t) => mongoose.Types.ObjectId.isValid(t))
-        : [];
-      batch.assignedTeachers = newTeacherIds;
-    }
-
-    await batch.save();
-
-    // Sync with User model
-    if (newTeacherIds !== null) {
-      // Remove this batch from any users no longer assigned
-      await User.updateMany(
-        { assignedBatches: id, _id: { $nin: newTeacherIds } },
-        { $pull: { assignedBatches: id, batches: id } }
-      );
-      // Add this batch to newly assigned users
-      if (newTeacherIds.length > 0) {
-        await User.updateMany(
-          { _id: { $in: newTeacherIds } },
-          { $addToSet: { assignedBatches: id, batches: id } }
-        );
-      }
-    }
-
-    const populated = await Batch.findById(id)
-      .populate('course', 'name code durationYears')
-      .populate('assignedTeachers', 'name email employeeId phone');
-    return res.status(200).json(populated);
-  } catch (error) {
-    console.error('updateBatch error:', error);
-    return res.status(500).json({ message: 'Error updating batch', error: error.message });
-  }
-};
-
-const deleteBatch = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const batch = await Batch.findById(id);
-    if (!batch) {
-      return res.status(404).json({ message: 'Batch not found.' });
-    }
-
-    const studentCount = await Student.countDocuments({ batch: id });
-    if (studentCount > 0) {
-      return res.status(400).json({
-        message: `Cannot delete batch '${batch.name}' because it has ${studentCount} assigned student(s). Please reassign or delete these students first.`,
-      });
-    }
-
-    await Batch.findByIdAndDelete(id);
-    return res.status(200).json({ message: `Batch '${batch.name}' deleted successfully.` });
-  } catch (error) {
-    console.error('deleteBatch error:', error);
-    return res.status(500).json({ message: 'Error deleting batch', error: error.message });
-  }
-};
-
-const exportBatchesCsv = async (req, res) => {
-  try {
-    const { course, isActive } = req.query;
-    const filter = {};
-    if (isActive !== undefined && isActive !== 'all') {
-      filter.isActive = isActive === 'true' || isActive === true;
-    }
-    if (course) {
-      const courseDoc = mongoose.Types.ObjectId.isValid(course)
-        ? await Course.findById(course)
-        : await Course.findOne({ code: course.toUpperCase().trim() });
-      if (courseDoc) filter.course = courseDoc._id;
-    }
-
-    const batches = await Batch.find(filter)
-      .populate('course', 'code name')
-      .sort({ startYear: -1, name: 1 });
-
-    const rows = batches.map((b) => ({
-      name: b.name,
-      courseCode: b.course?.code || '',
-      startYear: b.startYear,
-      endYear: b.endYear,
-      isActive: b.isActive ? 'Active' : 'Archived',
-    }));
-
-    const csvData = toCsv(rows, ['name', 'courseCode', 'startYear', 'endYear', 'isActive']);
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="batches.csv"');
-    return res.status(200).send(csvData);
-  } catch (err) {
-    console.error('exportBatchesCsv error:', err);
-    return res.status(500).json({ message: 'Error exporting batches CSV' });
-  }
-};
-
-const importBatchesCsv = async (req, res) => {
-  try {
-    if (!req.file || !req.file.buffer) {
-      return res.status(400).json({ message: 'CSV file is required.' });
-    }
-    const rows = parseCsv(req.file.buffer);
-    let created = 0, updated = 0, skipped = 0;
-    const errors = [];
-
-    const courses = await Course.find();
-    const courseMap = new Map();
-    courses.forEach((c) => courseMap.set(c.code.toUpperCase(), c));
-
-    for (const [index, row] of rows.entries()) {
-      const lineNum = index + 2;
-      const name = (row.name || row.Name || '').trim();
-      const courseCode = (row.courseCode || row.CourseCode || '').toUpperCase().trim();
-      const startYear = Number(row.startYear || row.StartYear);
-      const endYear = Number(row.endYear || row.EndYear);
-      const isActiveRaw = row.isActive || row.IsActive || 'Active';
-      const isActive = isActiveRaw.toString().toLowerCase() !== 'archived' && isActiveRaw.toString().toLowerCase() !== 'false';
-
-      if (!courseCode || !startYear) {
-        errors.push({ row: lineNum, reason: 'CourseCode and StartYear are required.' });
-        skipped++;
-        continue;
-      }
-
-      const courseDoc = courseMap.get(courseCode);
-      if (!courseDoc) {
-        errors.push({ row: lineNum, reason: `Course with code '${courseCode}' not found.` });
-        skipped++;
-        continue;
-      }
-
-      const calculatedEndYear = endYear || (startYear + (courseDoc.durationYears || 4));
-      const calculatedName = name || `${startYear}-${calculatedEndYear}`;
-
-      let existing = await Batch.findOne({ course: courseDoc._id, name: calculatedName });
-      if (existing) {
-        existing.startYear = startYear;
-        existing.endYear = calculatedEndYear;
-        existing.isActive = isActive;
-        await existing.save();
-        updated++;
-      } else {
-        await Batch.create({
-          name: calculatedName,
-          course: courseDoc._id,
-          startYear,
-          endYear: calculatedEndYear,
-          isActive,
-        });
-        created++;
-      }
-    }
-
-    return res.status(200).json({
-      totalRows: rows.length,
-      created,
-      updated,
-      skipped,
-      errors,
-    });
-  } catch (err) {
-    console.error('importBatchesCsv error:', err);
-    return res.status(500).json({ message: 'Error importing batches CSV', error: err.message });
-  }
-};
-
-const exportBatchesPdf = async (req, res) => {
-  try {
-    const settings = await Setting.findOne();
-    const { course, isActive } = req.query;
-    const filter = {};
-    if (isActive !== undefined && isActive !== 'all') {
-      filter.isActive = isActive === 'true' || isActive === true;
-    }
-    let courseNameFilter = '';
-    if (course) {
-      const courseDoc = mongoose.Types.ObjectId.isValid(course)
-        ? await Course.findById(course)
-        : await Course.findOne({ code: course.toUpperCase().trim() });
-      if (courseDoc) {
-        filter.course = courseDoc._id;
-        courseNameFilter = `${courseDoc.name} (${courseDoc.code})`;
-      }
-    }
-
-    const batches = await Batch.find(filter)
-      .populate('course', 'name code')
-      .sort({ startYear: -1, name: 1 });
-
-    const batchIds = batches.map((b) => b._id);
-    const counts = await Student.aggregate([
-      { $match: { batch: { $in: batchIds }, isActive: { $ne: false } } },
-      { $group: { _id: '$batch', count: { $sum: 1 } } },
-    ]);
-    const countMap = new Map();
-    counts.forEach((c) => countMap.set(c._id.toString(), c.count));
-
-    const rows = batches.map((b) => ({
-      name: b.name,
-      course: b.course ? `${b.course.name} (${b.course.code})` : '—',
-      startYear: b.startYear,
-      endYear: b.endYear,
-      studentCount: countMap.get(b._id.toString()) || 0,
-      status: b.isActive ? 'Active' : 'Archived',
-    }));
-
-    const html = buildGenericTablePdfHtml({
-      institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
-      title: 'Student Cohort Batches Master List',
-      subtitle: 'Admission-year ranges and cohort progression tracking',
-      filters: {
-        ...(courseNameFilter ? { Program: courseNameFilter } : {}),
-        ...(isActive && isActive !== 'all' ? { Status: isActive === 'true' ? 'Active Only' : 'Archived Only' } : {}),
-      },
-      columns: [
-        { header: 'Batch Name', key: 'name' },
-        { header: 'Program', key: 'course' },
-        { header: 'Start Year', key: 'startYear', align: 'center' },
-        { header: 'End Year', key: 'endYear', align: 'center' },
-        { header: 'Students', key: 'studentCount', align: 'center' },
-        {
-          header: 'Status',
-          render: (r) => `<span class="badge ${r.status === 'Active' ? 'badge-green' : 'badge-slate'}">${r.status}</span>`,
-          align: 'center',
-        },
-      ],
-      rows,
-    });
-
-    const pdfBuffer = await generatePdf(html);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="batches.pdf"');
-    return res.status(200).send(pdfBuffer);
-  } catch (err) {
-    console.error('exportBatchesPdf error:', err);
-    return res.status(500).json({ message: 'Error generating batches PDF', error: err.message });
-  }
-};
 
 const importDepartmentsCsv = async (req, res) => {
   try {
@@ -893,7 +546,7 @@ const importDepartmentsCsv = async (req, res) => {
 // ==================== USERS ====================
 const createUser = async (req, res) => {
   try {
-    const { name, email, password, role, department, course, year, employeeId, phone, teachingYears } = req.body;
+    const { name, email, password, role, department, course, year, session, employeeId, phone, teachingYears } = req.body;
     if (!name || !email || !password || !role) {
       return res.status(400).json({ message: 'Name, email, password, and role are required.' });
     }
@@ -906,28 +559,23 @@ const createUser = async (req, res) => {
     let assignedYear = null;
     let assignedDept = null;
     let assignedCourse = null;
+    let assignedSession = null;
     let assignedTeachingYears = undefined;
 
-    let assignedBatchesIds = [];
-    if (Array.isArray(req.body.assignedBatches)) {
-      assignedBatchesIds = req.body.assignedBatches.filter((b) => mongoose.Types.ObjectId.isValid(b));
-    } else if (Array.isArray(req.body.batches)) {
-      assignedBatchesIds = req.body.batches.filter((b) => mongoose.Types.ObjectId.isValid(b));
-    }
-
     if (role === 'hod') {
-      if (assignedBatchesIds.length === 0) {
-        return res.status(400).json({ message: 'At least one Managed Batch is required for HOD role.' });
+      if (!course) {
+        return res.status(400).json({ message: 'Course/Program is required for HOD role.' });
       }
-      const firstBatch = await Batch.findById(assignedBatchesIds[0]).populate('course');
-      assignedCourse = firstBatch?.course?._id || firstBatch?.course || null;
-      assignedDept = null;
-      assignedYear = null;
+      assignedCourse = course;
+      assignedSession = session && mongoose.Types.ObjectId.isValid(session) ? session : null;
+      assignedYear = year ? Number(year) : null;
+      assignedDept = department && mongoose.Types.ObjectId.isValid(department) ? department : null;
     } else if (role === 'teacher') {
       if (!department) {
         return res.status(400).json({ message: 'Department is required for Teacher role.' });
       }
       assignedDept = department;
+      assignedSession = session && mongoose.Types.ObjectId.isValid(session) ? session : null;
 
       let validYears = [];
       if (Array.isArray(teachingYears)) {
@@ -954,9 +602,8 @@ const createUser = async (req, res) => {
       department: assignedDept,
       course: assignedCourse,
       year: assignedYear,
+      session: assignedSession,
       teachingYears: role === 'teacher' ? assignedTeachingYears : undefined,
-      assignedBatches: ['teacher', 'hod'].includes(role) ? assignedBatchesIds : [],
-      batches: ['teacher', 'hod'].includes(role) ? assignedBatchesIds : [],
       employeeId: employeeId || '',
       phone: phone ? phone.trim() : '',
       isActive: true,
@@ -964,19 +611,10 @@ const createUser = async (req, res) => {
 
     await user.save();
 
-    // Synchronize with Batches
-    if (role === 'teacher' && assignedBatchesIds.length > 0) {
-      await Batch.updateMany(
-        { _id: { $in: assignedBatchesIds } },
-        { $addToSet: { assignedTeachers: user._id } }
-      );
-    }
-
     const populatedUser = await User.findById(user._id)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
       .populate('course', 'name code durationYears')
-      .populate('assignedBatches', 'name startYear endYear course isActive')
-      .populate('batches', 'name startYear endYear course isActive')
+      .populate('session', 'year semesterLabel isActive')
       .select('-passwordHash');
 
     return res.status(201).json(populatedUser);
@@ -988,11 +626,11 @@ const createUser = async (req, res) => {
 
 const getUsers = async (req, res) => {
   try {
-    const { role, department, year, course, batch } = req.query;
+    const { role, department, year, course, session } = req.query;
     const filter = {};
     if (role) filter.role = role;
     if (department) filter.department = department;
-    if (batch) filter.assignedBatches = batch;
+    if (session) filter.session = session;
 
     let courseDeptIds = [];
     if (course) {
@@ -1064,7 +702,7 @@ const getUsers = async (req, res) => {
     const users = await User.find(filter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
       .populate('course', 'name code durationYears')
-      .populate('assignedBatches', 'name startYear endYear course isActive')
+      .populate('session', 'year semesterLabel isActive')
       .select('-passwordHash')
       .sort({ createdAt: -1 });
 
@@ -1217,8 +855,8 @@ const getTeachersForCourse = async (req, res) => {
 
     const teachers = await User.find(teacherQuery)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('assignedBatches', 'name startYear endYear course isActive')
-      .select('name email employeeId phone department teachingYears assignedBatches')
+      .populate('session', 'year semesterLabel isActive')
+      .select('name email employeeId phone department teachingYears session')
       .sort({ name: 1 });
 
     return res.status(200).json(teachers);
@@ -1231,7 +869,7 @@ const getTeachersForCourse = async (req, res) => {
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, email, password, role, department, course, year, employeeId, phone, isActive, teachingYears, assignedBatches } = req.body;
+    const { name, email, password, role, department, course, year, session, employeeId, phone, isActive, teachingYears } = req.body;
 
     const user = await User.findById(id);
     if (!user) {
@@ -1241,26 +879,14 @@ const updateUser = async (req, res) => {
     const targetRole = role || user.role;
 
     if (targetRole === 'hod') {
-      let validBatchIds = user.assignedBatches || user.batches || [];
-      if (assignedBatches !== undefined || req.body.batches !== undefined) {
-        const inputBatches = assignedBatches !== undefined ? assignedBatches : req.body.batches;
-        validBatchIds = Array.isArray(inputBatches)
-          ? inputBatches.filter((b) => mongoose.Types.ObjectId.isValid(b))
-          : [];
-      }
-      if (validBatchIds.length === 0) {
-        return res.status(400).json({ message: 'At least one Managed Batch is required for HOD role.' });
-      }
-
-      const firstBatch = await Batch.findById(validBatchIds[0]).populate('course');
-      user.course = firstBatch?.course?._id || firstBatch?.course || null;
-      user.year = null;
-      user.department = null;
+      if (course !== undefined) user.course = course || null;
+      if (session !== undefined) user.session = session && mongoose.Types.ObjectId.isValid(session) ? session : null;
+      if (year !== undefined) user.year = year ? Number(year) : null;
+      if (department !== undefined) user.department = department && mongoose.Types.ObjectId.isValid(department) ? department : null;
       user.teachingYears = undefined;
-      user.assignedBatches = validBatchIds;
-      user.batches = validBatchIds;
     } else if (targetRole === 'teacher') {
       if (department) user.department = department;
+      if (session !== undefined) user.session = session && mongoose.Types.ObjectId.isValid(session) ? session : null;
       user.course = null;
       user.year = null;
 
@@ -1274,34 +900,12 @@ const updateUser = async (req, res) => {
         }
         user.teachingYears = Array.from(new Set(validYears)).sort((a, b) => a - b);
       }
-
-      if (assignedBatches !== undefined || req.body.batches !== undefined) {
-        const inputBatches = assignedBatches !== undefined ? assignedBatches : req.body.batches;
-        const validBatchIds = Array.isArray(inputBatches)
-          ? inputBatches.filter((b) => mongoose.Types.ObjectId.isValid(b))
-          : [];
-        user.assignedBatches = validBatchIds;
-        user.batches = validBatchIds;
-
-        // Synchronize with Batches
-        await Batch.updateMany(
-          { assignedTeachers: id, _id: { $nin: validBatchIds } },
-          { $pull: { assignedTeachers: id } }
-        );
-        if (validBatchIds.length > 0) {
-          await Batch.updateMany(
-            { _id: { $in: validBatchIds } },
-            { $addToSet: { assignedTeachers: id } }
-          );
-        }
-      }
     } else {
       user.department = null;
       user.course = null;
       user.year = null;
+      user.session = null;
       user.teachingYears = undefined;
-      user.assignedBatches = [];
-      user.batches = [];
     }
 
     if (phone !== undefined && phone !== '' && !validateIndianPhone(phone)) {
@@ -1325,8 +929,7 @@ const updateUser = async (req, res) => {
     const updatedUser = await User.findById(id)
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('course')
-      .populate('assignedBatches', 'name startYear endYear course isActive')
-      .populate('batches', 'name startYear endYear course isActive')
+      .populate('session', 'year semesterLabel isActive')
       .select('-passwordHash');
 
     return res.status(200).json(updatedUser);
@@ -1807,7 +1410,7 @@ const deleteSession = async (req, res) => {
 // ==================== SECTIONS ====================
 const createSection = async (req, res) => {
   try {
-    const { name, department, semester, year, session, batch } = req.body;
+    const { name, department, semester, year, session } = req.body;
     if (!name || !department || !semester || !session) {
       return res.status(400).json({ message: 'Name, department, semester, and session are required.' });
     }
@@ -1821,14 +1424,12 @@ const createSection = async (req, res) => {
       semester: semNum,
       year: calculatedYear,
       session,
-      batch: batch || null,
     });
     await newSection.save();
 
     const populated = await Section.findById(newSection._id)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('session', 'year semesterLabel')
-      .populate('batch', 'name startYear endYear isActive');
+      .populate('session', 'year semesterLabel');
 
     return res.status(201).json(populated);
   } catch (error) {
@@ -1839,11 +1440,10 @@ const createSection = async (req, res) => {
 
 const getSections = async (req, res) => {
   try {
-    const { department, session, year, course, batch } = req.query;
+    const { department, session, year, course } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (session) filter.session = session;
-    if (batch) filter.batch = batch;
     if (year) {
       if (year === 'missing') {
         filter.$or = [{ year: { $exists: false } }, { year: null }];
@@ -1868,7 +1468,6 @@ const getSections = async (req, res) => {
     const sections = await Section.find(filter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
       .populate('session', 'year semesterLabel isActive')
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ year: 1, semester: 1, name: 1 });
 
     return res.status(200).json(sections);
@@ -1881,7 +1480,7 @@ const getSections = async (req, res) => {
 const updateSection = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, department, semester, year, session, batch } = req.body;
+    const { name, department, semester, year, session } = req.body;
 
     const sec = await Section.findById(id);
     if (!sec) {
@@ -1893,7 +1492,6 @@ const updateSection = async (req, res) => {
     if (semester) sec.semester = Number(semester);
     if (year) sec.year = Number(year);
     if (session) sec.session = session;
-    if (batch !== undefined) sec.batch = batch || null;
 
     await sec.save();
 
@@ -1903,8 +1501,7 @@ const updateSection = async (req, res) => {
 
     const populated = await Section.findById(id)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('session', 'year semesterLabel')
-      .populate('batch', 'name startYear endYear isActive');
+      .populate('session', 'year semesterLabel');
 
     return res.status(200).json(populated);
   } catch (error) {
@@ -1946,55 +1543,12 @@ const deleteSection = async (req, res) => {
   }
 };
 
-const backfillMissingSectionBatches = async (req, res) => {
-  try {
-    const sectionsWithoutBatch = await Section.find({
-      $or: [{ batch: { $exists: false } }, { batch: null }],
-    }).populate({ path: 'department', populate: { path: 'course' } });
-
-    if (sectionsWithoutBatch.length === 0) {
-      return res.status(200).json({ message: 'All sections already have an assigned batch.', updatedCount: 0 });
-    }
-
-    const batches = await Batch.find().populate('course');
-    let updatedCount = 0;
-
-    for (const sec of sectionsWithoutBatch) {
-      const courseId = sec.department?.course?._id?.toString() || sec.department?.course?.toString();
-      if (!courseId) continue;
-
-      // Find matching batch for this course based on section year or active status
-      const courseBatches = batches.filter((b) => (b.course?._id?.toString() || b.course?.toString()) === courseId);
-      if (courseBatches.length > 0) {
-        // Find best match by year or active
-        const currentYear = new Date().getFullYear();
-        const expectedStartYear = currentYear - (sec.year || 1) + 1;
-        const matchByYear = courseBatches.find((b) => b.startYear === expectedStartYear);
-        const matchActive = courseBatches.find((b) => b.isActive) || courseBatches[0];
-
-        sec.batch = (matchByYear || matchActive)._id;
-        await sec.save();
-        updatedCount++;
-      }
-    }
-
-    return res.status(200).json({
-      message: `Successfully backfilled batches for ${updatedCount} section(s).`,
-      updatedCount,
-    });
-  } catch (error) {
-    console.error('backfillMissingSectionBatches error:', error);
-    return res.status(500).json({ message: 'Error backfilling section batches', error: error.message });
-  }
-};
-
 const exportSectionsCsv = async (req, res) => {
   try {
-    const { course, department, year, batch } = req.query;
+    const { course, department, year } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (year) filter.year = Number(year);
-    if (batch) filter.batch = batch;
     if (course) {
       const courseDoc = mongoose.Types.ObjectId.isValid(course)
         ? await Course.findById(course)
@@ -2008,7 +1562,6 @@ const exportSectionsCsv = async (req, res) => {
     const sections = await Section.find(filter)
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('session', 'semesterLabel year')
-      .populate('batch', 'name')
       .sort({ year: 1, name: 1 });
 
     const rows = sections.map((s) => ({
@@ -2018,10 +1571,9 @@ const exportSectionsCsv = async (req, res) => {
       year: s.year || 1,
       semester: s.semester,
       sessionLabel: s.session?.semesterLabel || '',
-      batchName: s.batch?.name || '',
     }));
 
-    const csvData = toCsv(rows, ['courseCode', 'departmentCode', 'name', 'year', 'semester', 'sessionLabel', 'batchName']);
+    const csvData = toCsv(rows, ['courseCode', 'departmentCode', 'name', 'year', 'semester', 'sessionLabel']);
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="sections.csv"');
     return res.status(200).send(csvData);
@@ -2034,11 +1586,10 @@ const exportSectionsCsv = async (req, res) => {
 const exportSectionsPdf = async (req, res) => {
   try {
     const settings = await Setting.findOne();
-    const { course, department, year, batch } = req.query;
+    const { course, department, year } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (year) filter.year = Number(year);
-    if (batch) filter.batch = batch;
     if (course) {
       const courseDoc = mongoose.Types.ObjectId.isValid(course)
         ? await Course.findById(course)
@@ -2052,7 +1603,6 @@ const exportSectionsPdf = async (req, res) => {
     const sections = await Section.find(filter)
       .populate({ path: 'department', populate: { path: 'course' } })
       .populate('session', 'semesterLabel year')
-      .populate('batch', 'name')
       .sort({ year: 1, name: 1 });
 
     const rows = sections.map((s) => ({
@@ -2061,25 +1611,19 @@ const exportSectionsPdf = async (req, res) => {
       department: s.department?.name || '—',
       year: `Year ${s.year || 1}`,
       semester: `Sem ${s.semester}`,
-      batch: s.batch?.name ? `${s.batch.name} Batch` : '—',
       session: s.session ? `${s.session.year} (${s.session.semesterLabel})` : '—',
     }));
 
     const html = buildGenericTablePdfHtml({
       institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Class Sections Directory',
-      subtitle: 'Classroom cohorts, departments, admission batches, and academic session groupings',
+      subtitle: 'Classroom cohorts, departments, academic years, and session groupings',
       columns: [
         { header: 'Section Name', key: 'name' },
         { header: 'Program', key: 'course', align: 'center' },
         { header: 'Department', key: 'department' },
         { header: 'Academic Year', key: 'year', align: 'center' },
         { header: 'Semester', key: 'semester', align: 'center' },
-        {
-          header: 'Batch Cohort',
-          render: (r) => `<span class="badge badge-indigo font-bold">${r.batch}</span>`,
-          align: 'center',
-        },
         { header: 'Academic Session', key: 'session' },
       ],
       rows,
@@ -2123,16 +1667,6 @@ const importSectionsCsv = async (req, res) => {
     const sessionMap = new Map();
     sessions.forEach((s) => sessionMap.set(s.semesterLabel.toLowerCase(), s._id));
 
-    const batches = await Batch.find().populate('course');
-    const batchCompoundMap = new Map();
-    batches.forEach((b) => {
-      const cCode = b.course?.code ? b.course.code.toUpperCase() : '';
-      batchCompoundMap.set(`${cCode}_${b.name.toUpperCase()}`, b._id);
-      if (!batchCompoundMap.has(b.name.toUpperCase())) {
-        batchCompoundMap.set(b.name.toUpperCase(), b._id);
-      }
-    });
-
     for (const [index, row] of rows.entries()) {
       const lineNum = index + 2;
       const name = (row.name || row.Name || '').trim();
@@ -2141,7 +1675,6 @@ const importSectionsCsv = async (req, res) => {
       const sem = Number(row.semester || row.Semester || 1);
       const yr = Number(row.year || row.Year || Math.ceil(sem / 2) || 1);
       const sessionLabel = (row.sessionLabel || row.session || '').toLowerCase().trim();
-      const batchName = (row.batchName || row.batch || '').trim().toUpperCase();
 
       if (!name || !deptCode) {
         errors.push({ row: lineNum, reason: 'Name and DepartmentCode are required.' });
@@ -2174,30 +1707,10 @@ const importSectionsCsv = async (req, res) => {
         continue;
       }
 
-      let batchId = null;
-      if (batchName) {
-        if (courseCode) {
-          batchId = batchCompoundMap.get(`${courseCode}_${batchName}`);
-        } else {
-          batchId = batchCompoundMap.get(batchName);
-        }
-      }
-
-      // Fallback batch for department's course if omitted
-      if (!batchId) {
-        const targetDept = departments.find((d) => d._id.toString() === deptId.toString());
-        const targetCourseId = targetDept?.course?._id?.toString() || targetDept?.course?.toString();
-        const courseBatches = batches.filter((b) => (b.course?._id?.toString() || b.course?.toString()) === targetCourseId);
-        if (courseBatches.length > 0) {
-          batchId = (courseBatches.find((b) => b.isActive) || courseBatches[0])._id;
-        }
-      }
-
       let sec = await Section.findOne({ name, department: deptId, session: sessionId });
       if (sec) {
         sec.semester = sem;
         sec.year = yr;
-        if (batchId) sec.batch = batchId;
         await sec.save();
         updated++;
       } else {
@@ -2207,7 +1720,6 @@ const importSectionsCsv = async (req, res) => {
           semester: sem,
           year: yr,
           session: sessionId,
-          batch: batchId || null,
         });
         await sec.save();
         created++;
@@ -2230,7 +1742,7 @@ const importSectionsCsv = async (req, res) => {
 // ==================== SUBJECTS ====================
 const createSubject = async (req, res) => {
   try {
-    const { name, code, department, semester, year, credits, teacher, batch } = req.body;
+    const { name, code, department, semester, year, credits, teacher } = req.body;
     if (!name || !code || !department || !semester) {
       return res.status(400).json({ message: 'Name, code, department, and semester are required.' });
     }
@@ -2248,7 +1760,6 @@ const createSubject = async (req, res) => {
       semester: sem,
       year: yr,
       credits: credits ? Number(credits) : 3,
-      batch: batch && mongoose.Types.ObjectId.isValid(batch) ? batch : null,
     });
     await subject.save();
 
@@ -2294,8 +1805,7 @@ const createSubject = async (req, res) => {
       .populate({
         path: 'department',
         populate: { path: 'course', select: 'name code durationYears' },
-      })
-      .populate('batch', 'name startYear endYear isActive');
+      });
 
     const result = populated.toObject();
     result.assignedSectionsCount = assignedSectionsCount;
@@ -2312,16 +1822,11 @@ const createSubject = async (req, res) => {
 
 const getSubjects = async (req, res) => {
   try {
-    const { department, semester, year, course, batch, isActive, includeArchived } = req.query;
+    const { department, semester, year, course, isActive, includeArchived } = req.query;
     const filter = {};
     if (department) filter.department = department;
     if (semester) filter.semester = Number(semester);
     if (year) filter.year = Number(year);
-    if (batch && batch !== 'all') {
-      if (mongoose.Types.ObjectId.isValid(batch)) {
-        filter.batch = batch;
-      }
-    }
 
     if (includeArchived === 'true' || isActive === 'all') {
       // no isActive filter
@@ -2349,7 +1854,6 @@ const getSubjects = async (req, res) => {
 
     const subjects = await Subject.find(filter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ year: 1, semester: 1, code: 1 });
 
     const subjectIds = subjects.map((s) => s._id);
@@ -2389,7 +1893,7 @@ const getSubjects = async (req, res) => {
 const updateSubject = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, code, department, semester, year, credits, teacher, batch } = req.body;
+    const { name, code, department, semester, year, credits, teacher } = req.body;
 
     const subject = await Subject.findById(id);
     if (!subject) {
@@ -2408,9 +1912,6 @@ const updateSubject = async (req, res) => {
       subject.year = yr;
     }
     if (credits !== undefined) subject.credits = Number(credits);
-    if (batch !== undefined) {
-      subject.batch = batch && mongoose.Types.ObjectId.isValid(batch) ? batch : null;
-    }
 
     await subject.save();
 
@@ -2455,8 +1956,7 @@ const updateSubject = async (req, res) => {
       .populate({
         path: 'department',
         populate: { path: 'course', select: 'name code durationYears' },
-      })
-      .populate('batch', 'name startYear endYear isActive');
+      });
 
     const result = populated.toObject();
     result.assignedSectionsCount = assignedSectionsCount;
@@ -2571,8 +2071,7 @@ const archiveSubject = async (req, res) => {
       .populate({
         path: 'department',
         populate: { path: 'course', select: 'name code durationYears' },
-      })
-      .populate('batch', 'name startYear endYear isActive');
+      });
 
     return res.status(200).json({
       message: `Subject '${subject.name}' (${subject.code}) has been archived successfully.`,
@@ -2599,8 +2098,7 @@ const restoreSubject = async (req, res) => {
       .populate({
         path: 'department',
         populate: { path: 'course', select: 'name code durationYears' },
-      })
-      .populate('batch', 'name startYear endYear isActive');
+      });
 
     return res.status(200).json({
       message: `Subject '${subject.name}' (${subject.code}) has been restored successfully.`,
@@ -2847,7 +2345,7 @@ const importSubjectsCsv = async (req, res) => {
 // ==================== STUDENTS ====================
 const createStudent = async (req, res) => {
   try {
-    const { name, rollNumber, section, department, semester, year, email, phone, isActive, batch } = req.body;
+    const { name, rollNumber, section, department, course, semester, year, admissionYear, email, phone, isActive } = req.body;
     if (!name || !rollNumber || !section || !department || !semester) {
       return res.status(400).json({ message: 'Name, rollNumber, section, department, and semester are required.' });
     }
@@ -2875,12 +2373,22 @@ const createStudent = async (req, res) => {
       studentYear = secDoc?.year || Math.min(4, Math.max(1, Math.ceil(Number(semester) / 2)));
     }
 
+    let courseId = course;
+    if (!courseId) {
+      const deptDoc = await Department.findById(department);
+      courseId = deptDoc?.course;
+    }
+
+    const currentCalendarYear = new Date().getFullYear();
+    const admYear = admissionYear ? Number(admissionYear) : (currentCalendarYear - (studentYear - 1));
+
     const student = new Student({
       name: name.trim(),
       rollNumber: rollNumber.toUpperCase().trim(),
       section,
       department,
-      batch: batch || null,
+      course: courseId,
+      admissionYear: admYear,
       semester: Number(semester),
       year: studentYear,
       email: email ? email.toLowerCase().trim() : '',
@@ -2890,9 +2398,9 @@ const createStudent = async (req, res) => {
 
     await student.save();
     const populated = await Student.findById(student._id)
+      .populate('course', 'name code durationYears')
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('section', 'name semester year')
-      .populate('batch', 'name startYear endYear isActive');
+      .populate('section', 'name semester year');
 
     return res.status(201).json(populated);
   } catch (error) {
@@ -2903,7 +2411,7 @@ const createStudent = async (req, res) => {
 
 const getStudents = async (req, res) => {
   try {
-    const { department, section, semester, year, course, search, isActive, batch } = req.query;
+    const { department, section, semester, year, course, admissionYear, search, isActive } = req.query;
     const filter = {};
     if (isActive !== undefined && isActive !== 'all') {
       filter.isActive = isActive === 'true' || isActive === true;
@@ -2913,7 +2421,7 @@ const getStudents = async (req, res) => {
     if (department) filter.department = department;
     if (section) filter.section = section;
     if (semester) filter.semester = Number(semester);
-    if (batch) filter.batch = batch;
+    if (admissionYear) filter.admissionYear = Number(admissionYear);
     if (year) {
       if (year === 'missing') {
         filter.$or = [{ year: { $exists: false } }, { year: null }];
@@ -2927,11 +2435,7 @@ const getStudents = async (req, res) => {
         ? await Course.findById(course)
         : await Course.findOne({ code: course.toUpperCase().trim() });
       if (courseDoc) {
-        const depts = await Department.find({ course: courseDoc._id }).select('_id');
-        const deptIds = depts.map((d) => d._id);
-        if (!filter.department) {
-          filter.department = { $in: deptIds };
-        }
+        filter.course = courseDoc._id;
       }
     }
 
@@ -2951,9 +2455,9 @@ const getStudents = async (req, res) => {
     }
 
     const students = await Student.find(filter)
+      .populate('course', 'name code durationYears')
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
       .populate('section', 'name semester year')
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ year: 1, rollNumber: 1 });
 
     return res.status(200).json(students);
@@ -2966,7 +2470,7 @@ const getStudents = async (req, res) => {
 const updateStudent = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, rollNumber, section, department, semester, year, email, phone, isActive, batch } = req.body;
+    const { name, rollNumber, section, department, course, semester, year, admissionYear, email, phone, isActive } = req.body;
 
     const student = await Student.findById(id);
     if (!student) {
@@ -2981,7 +2485,8 @@ const updateStudent = async (req, res) => {
     if (rollNumber) student.rollNumber = rollNumber.toUpperCase().trim();
     if (section) student.section = section;
     if (department) student.department = department;
-    if (batch !== undefined) student.batch = batch || null;
+    if (course) student.course = course;
+    if (admissionYear !== undefined) student.admissionYear = Number(admissionYear);
     if (semester) student.semester = Number(semester);
     if (year) {
       student.year = Number(year);
@@ -2995,9 +2500,9 @@ const updateStudent = async (req, res) => {
 
     await student.save();
     const populated = await Student.findById(id)
+      .populate('course', 'name code durationYears')
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('section', 'name semester year')
-      .populate('batch', 'name startYear endYear isActive');
+      .populate('section', 'name semester year');
 
     return res.status(200).json(populated);
   } catch (error) {
@@ -3069,15 +2574,6 @@ const bulkImportStudents = async (req, res) => {
       sectionDocMap.set(key, s);
     });
 
-    const batches = await Batch.find();
-    const batchMap = new Map();
-    batches.forEach((b) => {
-      batchMap.set(`${b.course.toString()}_${b.name.toUpperCase()}`, b._id);
-      if (!batchMap.has(b.name.toUpperCase())) {
-        batchMap.set(b.name.toUpperCase(), b._id);
-      }
-    });
-
     let created = 0, updated = 0, skipped = 0;
     const errors = [];
 
@@ -3122,15 +2618,16 @@ const bulkImportStudents = async (req, res) => {
         const secDoc = sectionDocMap.get(secKey);
         const resolvedYear = row.year || secDoc?.year || Math.min(4, Math.max(1, Math.ceil(row.semester / 2)));
 
-        const batchRaw = (row.batch || row.batchName || row.Batch || row.BatchName || '').toUpperCase().trim();
-        let batchId = null;
-        if (batchRaw) {
-          const courseDoc = courseCode ? courseMap.get(courseCode) : null;
-          if (courseDoc) {
-            batchId = batchMap.get(`${courseDoc._id.toString()}_${batchRaw}`) || batchMap.get(batchRaw);
-          } else {
-            batchId = batchMap.get(batchRaw);
-          }
+        const currentCalendarYear = new Date().getFullYear();
+        const admYearRaw = row.admissionYear || row.AdmissionYear || row.admission_year || row.admYear;
+        const resolvedAdmYear = admYearRaw ? Number(admYearRaw) : (currentCalendarYear - (resolvedYear - 1));
+
+        let courseId = null;
+        if (courseCode && courseMap.get(courseCode)) {
+          courseId = courseMap.get(courseCode)._id;
+        } else {
+          const deptDoc = departments.find((d) => d._id.toString() === deptId.toString());
+          courseId = deptDoc?.course?._id || deptDoc?.course;
         }
 
         let cleanPhone = '';
@@ -3162,9 +2659,10 @@ const bulkImportStudents = async (req, res) => {
           existing.name = row.name.toString().trim();
           existing.section = secId;
           existing.department = deptId;
+          if (courseId) existing.course = courseId;
           existing.semester = row.semester || 1;
           existing.year = resolvedYear;
-          if (batchId) existing.batch = batchId;
+          existing.admissionYear = resolvedAdmYear;
           if (row.email) existing.email = row.email.toString().toLowerCase().trim();
           if (cleanPhone) existing.phone = cleanPhone;
           existing.isActive = true;
@@ -3176,7 +2674,8 @@ const bulkImportStudents = async (req, res) => {
             rollNumber: cleanRoll.toUpperCase(),
             section: secId,
             department: deptId,
-            batch: batchId || null,
+            course: courseId,
+            admissionYear: resolvedAdmYear,
             semester: row.semester || 1,
             year: resolvedYear,
             email: row.email ? row.email.toString().toLowerCase().trim() : '',
@@ -3209,9 +2708,9 @@ const bulkImportStudents = async (req, res) => {
 const detectDuplicateStudents = async (req, res) => {
   try {
     const students = await Student.find()
+      .populate('course', 'name code durationYears')
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
       .populate('section', 'name semester year')
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ rollNumber: 1, createdAt: 1 });
 
     const rollMap = new Map();
@@ -3372,7 +2871,7 @@ const resolveDuplicateStudents = async (req, res) => {
 
 const exportStudentsCsv = async (req, res) => {
   try {
-    const { department, section, semester, year, course, search, isActive, batch } = req.query;
+    const { department, section, semester, year, course, search, isActive, admissionYear } = req.query;
     const filter = {};
     if (isActive !== undefined && isActive !== 'all') {
       filter.isActive = isActive === 'true' || isActive === true;
@@ -3380,7 +2879,7 @@ const exportStudentsCsv = async (req, res) => {
     if (department) filter.department = department;
     if (section) filter.section = section;
     if (semester) filter.semester = Number(semester);
-    if (batch) filter.batch = batch;
+    if (admissionYear) filter.admissionYear = Number(admissionYear);
     if (year) {
       if (year === 'missing') {
         filter.$or = [{ year: { $exists: false } }, { year: null }];
@@ -3394,8 +2893,7 @@ const exportStudentsCsv = async (req, res) => {
         ? await Course.findById(course)
         : await Course.findOne({ code: course.toUpperCase().trim() });
       if (courseDoc) {
-        const depts = await Department.find({ course: courseDoc._id }).select('_id');
-        filter.department = { $in: depts.map((d) => d._id) };
+        filter.course = courseDoc._id;
       }
     }
 
@@ -3415,20 +2913,20 @@ const exportStudentsCsv = async (req, res) => {
     }
 
     const students = await Student.find(filter)
+      .populate('course', 'name code')
       .populate({ path: 'department', populate: { path: 'course', select: 'name code' } })
       .populate('section', 'name semester year')
-      .populate('batch', 'name')
       .sort({ year: 1, rollNumber: 1 });
 
     const rows = students.map((s) => ({
       name: s.name,
       rollNumber: s.rollNumber,
-      courseCode: s.department?.course?.code || '',
+      courseCode: s.course?.code || s.department?.course?.code || '',
       departmentCode: s.department?.code || '',
       sectionName: s.section?.name || '',
       year: s.year || 1,
       semester: s.semester,
-      batchName: s.batch?.name || '',
+      admissionYear: s.admissionYear || '',
       email: s.email || '',
       phone: s.phone || '',
       isActive: s.isActive ? 'Active' : 'Inactive',
@@ -3442,7 +2940,7 @@ const exportStudentsCsv = async (req, res) => {
       'sectionName',
       'year',
       'semester',
-      'batchName',
+      'admissionYear',
       'email',
       'phone',
       'isActive',
@@ -3460,7 +2958,7 @@ const exportStudentsCsv = async (req, res) => {
 const exportStudentsPdf = async (req, res) => {
   try {
     const settings = await Setting.findOne();
-    const { department, section, semester, year, course, search, isActive, batch } = req.query;
+    const { department, section, semester, year, course, search, isActive, admissionYear } = req.query;
     const filter = {};
     if (isActive !== undefined && isActive !== 'all') {
       filter.isActive = isActive === 'true' || isActive === true;
@@ -3468,7 +2966,7 @@ const exportStudentsPdf = async (req, res) => {
     if (department) filter.department = department;
     if (section) filter.section = section;
     if (semester) filter.semester = Number(semester);
-    if (batch) filter.batch = batch;
+    if (admissionYear) filter.admissionYear = Number(admissionYear);
     if (year) {
       if (year === 'missing') {
         filter.$or = [{ year: { $exists: false } }, { year: null }];
@@ -3482,8 +2980,7 @@ const exportStudentsPdf = async (req, res) => {
         ? await Course.findById(course)
         : await Course.findOne({ code: course.toUpperCase().trim() });
       if (courseDoc) {
-        const depts = await Department.find({ course: courseDoc._id }).select('_id');
-        filter.department = { $in: depts.map((d) => d._id) };
+        filter.course = courseDoc._id;
       }
     }
 
@@ -3503,20 +3000,20 @@ const exportStudentsPdf = async (req, res) => {
     }
 
     const students = await Student.find(filter)
+      .populate('course', 'name code')
       .populate({ path: 'department', populate: { path: 'course', select: 'name code' } })
       .populate('section', 'name semester year')
-      .populate('batch', 'name')
       .sort({ year: 1, rollNumber: 1 });
 
     const rows = students.map((s) => ({
       rollNumber: s.rollNumber,
       name: s.name,
-      course: s.department?.course?.code || '—',
+      course: s.course?.code || s.department?.course?.code || '—',
       department: s.department?.name || '—',
       section: s.section?.name || '—',
       year: `Year ${s.year || 1}`,
       semester: `Sem ${s.semester}`,
-      batch: s.batch?.name || '—',
+      admissionYear: s.admissionYear ? `${s.admissionYear}` : '—',
       phone: s.phone || '—',
       status: s.isActive ? 'Active' : 'Inactive',
     }));
@@ -3524,7 +3021,7 @@ const exportStudentsPdf = async (req, res) => {
     const html = buildGenericTablePdfHtml({
       institutionName: settings?.institutionName || 'AttendEdge Institute of Technology',
       title: 'Student Records Official Roster',
-      subtitle: 'Enrolled students, academic cohorts, and cohort batch assignments',
+      subtitle: 'Enrolled students, academic programs, and enrollment records',
       columns: [
         { header: 'Roll Number', key: 'rollNumber', align: 'center' },
         { header: 'Student Name', key: 'name' },
@@ -3533,7 +3030,7 @@ const exportStudentsPdf = async (req, res) => {
         { header: 'Section', key: 'section', align: 'center' },
         { header: 'Year', key: 'year', align: 'center' },
         { header: 'Sem', key: 'semester', align: 'center' },
-        { header: 'Batch', key: 'batch', align: 'center' },
+        { header: 'Adm. Year', key: 'admissionYear', align: 'center' },
         { header: 'Contact Phone', key: 'phone', align: 'center' },
         {
           header: 'Status',
@@ -3610,7 +3107,7 @@ const backfillMissingYears = async (req, res) => {
 // ==================== PERIOD SLOTS (Timetable & Conflict Check) ====================
 const createPeriodSlot = async (req, res) => {
   try {
-    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel, batch } = req.body;
+    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel } = req.body;
     const isRecessBool = Boolean(isRecess);
 
     if (section === undefined || dayOfWeek === undefined || periodNumber === undefined || !startTime || !endTime || !session) {
@@ -3646,13 +3143,6 @@ const createPeriodSlot = async (req, res) => {
           message: `Access denied. HOD can only manage timetable for their assigned course and year.`,
         });
       }
-    }
-
-    let slotBatch = null;
-    if (batch && mongoose.Types.ObjectId.isValid(batch)) {
-      slotBatch = batch;
-    } else if (secDoc.batch) {
-      slotBatch = secDoc.batch;
     }
 
     const dayNum = Number(dayOfWeek);
@@ -3721,7 +3211,6 @@ const createPeriodSlot = async (req, res) => {
       session,
       isRecess: isRecessBool,
       recessLabel: isRecessBool ? recessLabel.trim() : '',
-      batch: slotBatch,
     });
 
     await slot.save();
@@ -3736,8 +3225,7 @@ const createPeriodSlot = async (req, res) => {
         select: 'name email employeeId department',
         populate: { path: 'department', select: 'name code' },
       })
-      .populate('session', 'year semesterLabel')
-      .populate('batch', 'name startYear endYear isActive');
+      .populate('session', 'year semesterLabel');
 
     return res.status(201).json(populated);
   } catch (error) {
@@ -3749,7 +3237,7 @@ const createPeriodSlot = async (req, res) => {
 const updatePeriodSlot = async (req, res) => {
   try {
     const { id } = req.params;
-    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel, batch } = req.body;
+    const { section, dayOfWeek, periodNumber, startTime, endTime, subject, teacher, session, isRecess, recessLabel } = req.body;
 
     const slot = await PeriodSlot.findById(id).populate('section');
     if (!slot) {
@@ -3871,9 +3359,6 @@ const updatePeriodSlot = async (req, res) => {
     if (session) slot.session = targetSession;
     slot.isRecess = isRecessBool;
     slot.recessLabel = targetRecessLabel;
-    if (batch !== undefined) {
-      slot.batch = batch && mongoose.Types.ObjectId.isValid(batch) ? batch : null;
-    }
 
     await slot.save();
 
@@ -3888,8 +3373,7 @@ const updatePeriodSlot = async (req, res) => {
         select: 'name email employeeId department',
         populate: { path: 'department', select: 'name code' },
       })
-      .populate('session', 'year semesterLabel')
-      .populate('batch', 'name startYear endYear isActive');
+      .populate('session', 'year semesterLabel');
 
     return res.status(200).json(populated);
   } catch (error) {
@@ -3986,18 +3470,10 @@ const deletePeriodTemplate = async (req, res) => {
       const secDept = await Department.findById(secDoc.department);
       const secCourseId = secDept?.course?.toString();
 
-      let rawBatches = req.user.assignedBatches || req.user.batches || req.user.batch || [];
-      if (!Array.isArray(rawBatches)) rawBatches = [rawBatches];
-      const batchIds = rawBatches.map((b) => (b && b._id ? b._id.toString() : b ? b.toString() : '')).filter(Boolean);
-
-      if (batchIds.length > 0 && secDoc.batch) {
-        const secBatchId = secDoc.batch._id ? secDoc.batch._id.toString() : secDoc.batch.toString();
-        if (!batchIds.includes(secBatchId)) {
-          return res.status(403).json({ message: 'Access denied. Section does not belong to your managed batch(es).' });
-        }
-      } else if (userYear && Number(secDoc.year) !== userYear) {
+      if (userYear && Number(secDoc.year) !== userYear) {
         return res.status(403).json({ message: 'Access denied. HOD can only manage timetable for their assigned course and year.' });
-      } else if (userCourseId && secCourseId !== userCourseId) {
+      }
+      if (userCourseId && secCourseId !== userCourseId) {
         return res.status(403).json({ message: 'Access denied. HOD can only manage timetable for their assigned course.' });
       }
     }
@@ -4173,17 +3649,12 @@ const resolvePeriodTimingInconsistency = async (req, res) => {
 
 const getPeriodSlots = async (req, res) => {
   try {
-    const { section, department, dayOfWeek, teacher, session, year, course, batch } = req.query;
+    const { section, department, dayOfWeek, teacher, session, year, course } = req.query;
     const filter = {};
     if (section) filter.section = section;
     if (dayOfWeek !== undefined) filter.dayOfWeek = Number(dayOfWeek);
     if (teacher) filter.teacher = teacher;
     if (session) filter.session = session;
-    if (batch && batch !== 'all') {
-      if (mongoose.Types.ObjectId.isValid(batch)) {
-        filter.batch = batch;
-      }
-    }
 
     let query = PeriodSlot.find(filter)
       .populate({
@@ -4197,7 +3668,6 @@ const getPeriodSlots = async (req, res) => {
         populate: { path: 'department', select: 'name code' },
       })
       .populate('session', 'year semesterLabel')
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ dayOfWeek: 1, periodNumber: 1 });
 
     const slots = await query;
@@ -4362,15 +3832,13 @@ const exportTimetablePdf = async (req, res) => {
   try {
     const settings = await Setting.findOne();
     const section = req.query.section || req.query.sectionId;
-    const batch = req.query.batch;
     if (!section) {
       return res.status(400).json({ message: 'Section ID query parameter is required.' });
     }
 
     const sectionDoc = await Section.findById(section)
       .populate({ path: 'department', populate: { path: 'course' } })
-      .populate('session')
-      .populate('batch');
+      .populate('session');
 
     if (!sectionDoc) {
       return res.status(404).json({ message: 'Section not found.' });
@@ -4381,14 +3849,10 @@ const exportTimetablePdf = async (req, res) => {
 
     // 2. Fetch scheduled period slots for this section
     const slotFilter = { section };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      slotFilter.batch = batch;
-    }
 
     const slots = await PeriodSlot.find(slotFilter)
       .populate('subject', 'name code')
-      .populate('teacher', 'name email employeeId')
-      .populate('batch', 'name');
+      .populate('teacher', 'name email employeeId');
 
     // 3. Dynamic Period Determination: Iterate over ONLY active period templates / configured periods
     let periods = [];
@@ -5284,7 +4748,7 @@ const exportReportsPdf = async (req, res) => {
 
 const getAdminDefaulters = async (req, res) => {
   try {
-    const { month, startDate, endDate, department, course, year, subject, mode, batch, batchId } = req.query;
+    const { month, startDate, endDate, department, course, year, subject, mode } = req.query;
 
     const data = await calculateDefaulters({
       month,
@@ -5294,7 +4758,6 @@ const getAdminDefaulters = async (req, res) => {
       departmentId: department || null,
       year: year ? Number(year) : null,
       subjectId: subject || null,
-      batchId: batchId || batch || null,
       mode: mode || (subject ? 'subject' : 'overall'),
     });
 
@@ -5308,7 +4771,7 @@ const getAdminDefaulters = async (req, res) => {
 const exportDefaultersPdf = async (req, res) => {
   try {
     const settings = await Setting.findOne();
-    let { month, startDate, endDate, department, course, year, subject, mode, batch, batchId } = req.query;
+    let { month, startDate, endDate, department, course, year, subject, mode } = req.query;
 
     const data = await calculateDefaulters({
       month,
@@ -5318,21 +4781,13 @@ const exportDefaultersPdf = async (req, res) => {
       departmentId: department || null,
       year: year ? Number(year) : null,
       subjectId: subject || null,
-      batchId: batchId || batch || null,
       mode: mode || (subject ? 'subject' : 'overall'),
     });
-
-    let batchLabel = '';
-    if (batch || batchId) {
-      const bDoc = await Batch.findById(batchId || batch);
-      if (bDoc) batchLabel = bDoc.name;
-    }
 
     const rows = (data.defaulters || []).map((d) => ({
       rollNumber: d.rollNumber || 'N/A',
       name: d.name || 'N/A',
       courseDept: d.courseDept || (d.courseCode && d.departmentCode ? `${d.courseCode} · ${d.departmentCode}` : d.departmentName || d.department || 'N/A'),
-      batch: d.batchName || batchLabel || '—',
       section: d.section || d.sectionName || 'N/A',
       year: d.year ? `Year ${d.year}` : 'N/A',
       attended: `${d.present != null ? d.present : (d.attended != null ? d.attended : 'N/A')} / ${d.totalPeriods != null ? d.totalPeriods : 'N/A'}`,
@@ -5347,7 +4802,6 @@ const exportDefaultersPdf = async (req, res) => {
       subtitle: `Students falling below mandatory attendance threshold (${data.thresholdPercent || 75}%)`,
       filters: {
         'Date Range': dateFilterLabel,
-        ...(batchLabel ? { Batch: batchLabel } : {}),
         Mode: data.mode === 'subject' ? 'Subject-wise' : 'Overall',
         Threshold: `${data.thresholdPercent || 75}%`,
       },
@@ -5355,7 +4809,6 @@ const exportDefaultersPdf = async (req, res) => {
         { header: 'Roll No', key: 'rollNumber', align: 'center' },
         { header: 'Student Name', key: 'name' },
         { header: 'Program / Dept', key: 'courseDept', align: 'center' },
-        { header: 'Cohort Batch', key: 'batch', align: 'center' },
         { header: 'Section', key: 'section', align: 'center' },
         { header: 'Year', key: 'year', align: 'center' },
         { header: 'Attended / Total', key: 'attended', align: 'center' },
@@ -5393,13 +4846,6 @@ module.exports = {
   exportDepartmentsCsv,
   exportDepartmentsPdf,
   importDepartmentsCsv,
-  createBatch,
-  getBatches,
-  updateBatch,
-  deleteBatch,
-  exportBatchesCsv,
-  exportBatchesPdf,
-  importBatchesCsv,
   createUser,
   getUsers,
   updateUser,
@@ -5438,7 +4884,6 @@ module.exports = {
   exportStudentsCsv,
   exportStudentsPdf,
   backfillMissingYears,
-  backfillMissingSectionBatches,
   createPeriodSlot,
   updatePeriodSlot,
   getPeriodSlots,

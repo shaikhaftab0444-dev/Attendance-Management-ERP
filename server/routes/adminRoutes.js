@@ -26,14 +26,6 @@ router.get('/departments', roleGuard('admin', 'hod'), adminController.getDepartm
 router.patch('/departments/:id', roleGuard('admin'), adminController.updateDepartment);
 router.delete('/departments/:id', roleGuard('admin'), adminController.deleteDepartment);
 
-// Batches & CSV/PDF (Admin only, Admin & HOD for read)
-router.get('/batches/export', roleGuard('admin'), adminController.exportBatchesCsv);
-router.get('/batches/export-pdf', roleGuard('admin'), adminController.exportBatchesPdf);
-router.post('/batches/import', roleGuard('admin'), uploadCsv.single('file'), adminController.importBatchesCsv);
-router.post('/batches', roleGuard('admin'), adminController.createBatch);
-router.get('/batches', roleGuard('admin', 'hod'), adminController.getBatches);
-router.patch('/batches/:id', roleGuard('admin'), adminController.updateBatch);
-router.delete('/batches/:id', roleGuard('admin'), adminController.deleteBatch);
 
 // Users & CSV/PDF (Admin only)
 router.get('/users/export', roleGuard('admin'), adminController.exportUsersCsv);
@@ -83,9 +75,8 @@ router.get('/students', roleGuard('admin'), adminController.getStudents);
 router.patch('/students/:id', roleGuard('admin'), adminController.updateStudent);
 router.delete('/students/:id', roleGuard('admin'), adminController.deleteStudent);
 
-// Data Cleanup & Year/Batch Backfill (Admin only)
+// Data Cleanup & Year Backfill (Admin only)
 router.post('/backfill-years', roleGuard('admin'), adminController.backfillMissingYears);
-router.post('/backfill-section-batches', roleGuard('admin'), adminController.backfillMissingSectionBatches);
 
 // Timetable / Period Slots & CSV/PDF (Admin & HOD)
 router.get('/period-slots/export', roleGuard('admin', 'hod'), adminController.exportPeriodSlotsCsv);

@@ -23,10 +23,16 @@ const studentSchema = new mongoose.Schema({
     ref: 'Department',
     required: true,
   },
-  batch: {
+  course: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Batch',
-    default: null,
+    ref: 'Course',
+    required: true,
+  },
+  admissionYear: {
+    type: Number,
+    required: true,
+    min: 1990,
+    max: 2100,
   },
   year: {
     type: Number,

@@ -20,7 +20,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Student, Department, Section, Course, Batch } from '../../types';
+import { Student, Department, Section, Course } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { StatusPill } from '../../components/ui/StatusPill';
@@ -33,7 +33,6 @@ export const AdminStudents: React.FC = () => {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [courses, setCourses] = useState<Course[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filters
@@ -41,7 +40,7 @@ export const AdminStudents: React.FC = () => {
   const [deptFilter, setDeptFilter] = useState('');
   const [secFilter, setSecFilter] = useState('');
   const [yearFilter, setYearFilter] = useState('all');
-  const [batchFilter, setBatchFilter] = useState('');
+  const [admissionYearFilter, setAdmissionYearFilter] = useState('');
   const [showOnlyInvalidPhones, setShowOnlyInvalidPhones] = useState(false);
 
   // Delete confirmation state
@@ -55,7 +54,7 @@ export const AdminStudents: React.FC = () => {
 
   // Student Form
   const [modalCourse, setModalCourse] = useState('');
-  const [batch, setBatch] = useState('');
+  const [admissionYear, setAdmissionYear] = useState<number>(new Date().getFullYear());
   const [name, setName] = useState('');
   const [rollNumber, setRollNumber] = useState('');
   const [department, setDepartment] = useState('');
@@ -134,16 +133,14 @@ export const AdminStudents: React.FC = () => {
 
   const fetchDependencies = async () => {
     try {
-      const [deptRes, secRes, crsRes, batchRes] = await Promise.all([
+      const [deptRes, secRes, crsRes] = await Promise.all([
         api.get('/admin/departments'),
         api.get('/admin/sections'),
         api.get('/admin/courses'),
-        api.get('/admin/batches'),
       ]);
       setDepartments(deptRes.data);
       setSections(secRes.data);
       setCourses(crsRes.data);
-      setBatches(batchRes.data);
     } catch (err: any) {
       console.error('Error loading deps:', err);
     }
@@ -157,7 +154,7 @@ export const AdminStudents: React.FC = () => {
       if (deptFilter) params.department = deptFilter;
       if (secFilter) params.section = secFilter;
       if (yearFilter !== 'all') params.year = yearFilter;
-      if (batchFilter) params.batch = batchFilter;
+      if (admissionYearFilter) params.admissionYear = admissionYearFilter;
 
       const res = await api.get('/admin/students', { params });
       setStudents(res.data);
@@ -174,7 +171,7 @@ export const AdminStudents: React.FC = () => {
 
   useEffect(() => {
     fetchStudents();
-  }, [courseFilter, deptFilter, secFilter, yearFilter, batchFilter]);
+  }, [courseFilter, deptFilter, secFilter, yearFilter, admissionYearFilter]);
 
   const openCreateModal = () => {
     setEditingStudent(null);
@@ -182,10 +179,7 @@ export const AdminStudents: React.FC = () => {
     setRollNumber('');
     const firstCourse = courses[0]?._id || '';
     setModalCourse(firstCourse);
-    const batchesForCourse = batches.filter(
-      (b) => (b.course?._id || b.course) === firstCourse && b.isActive
-    );
-    setBatch(batchesForCourse[0]?._id || '');
+    setAdmissionYear(new Date().getFullYear());
     const deptsForCourse = departments.filter(
       (d) => (d.course?._id || d.course) === firstCourse
     );
@@ -207,9 +201,9 @@ export const AdminStudents: React.FC = () => {
     setEditingStudent(st);
     setName(st.name);
     setRollNumber(st.rollNumber);
-    const cId = st.department?.course?._id || st.department?.course || '';
+    const cId = (typeof st.course === 'object' && st.course?._id) || (st.course as string) || st.department?.course?._id || st.department?.course || '';
     setModalCourse(cId);
-    setBatch(st.batch?._id || st.batch || '');
+    setAdmissionYear(st.admissionYear || new Date().getFullYear());
     setDepartment(st.department?._id || st.department || '');
     setSection(st.section?._id || st.section || '');
     setSemester(st.semester || 1);
@@ -222,7 +216,7 @@ export const AdminStudents: React.FC = () => {
 
   const handleSubmitStudent = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !rollNumber || !department || !section || !semester || !year) {
+    if (!name || !rollNumber || !modalCourse || !department || !section || !semester || !year || !admissionYear) {
       showToast('Please fill all mandatory fields.', 'warning');
       return;
     }
@@ -240,9 +234,10 @@ export const AdminStudents: React.FC = () => {
         await api.patch(`/admin/students/${editingStudent._id}`, {
           name,
           rollNumber,
+          course: modalCourse,
+          admissionYear: Number(admissionYear),
           department,
           section,
-          batch: batch || null,
           semester: Number(semester),
           year: Number(year),
           email,
@@ -254,9 +249,10 @@ export const AdminStudents: React.FC = () => {
         await api.post('/admin/students', {
           name,
           rollNumber,
+          course: modalCourse,
+          admissionYear: Number(admissionYear),
           department,
           section,
-          batch: batch || null,
           semester: Number(semester),
           year: Number(year),
           email,
@@ -315,9 +311,9 @@ export const AdminStudents: React.FC = () => {
 
   const downloadSampleCsv = () => {
     const csvContent =
-      'name,rollNumber,courseCode,departmentCode,sectionName,year,semester,batchName,email,phone\n' +
-      'Aarav Sharma,23CSE050,BTECH,CSE,CSE-4A,2,4,2023-2027,aarav.sharma@attendedge.edu,+919876543210\n' +
-      'Ananya Reddy,23CSE051,BTECH,CSE,CSE-4A,2,4,2023-2027,ananya.reddy@attendedge.edu,+919876543211\n';
+      'name,rollNumber,courseCode,departmentCode,sectionName,year,semester,admissionYear,email,phone\n' +
+      'Aarav Sharma,23CSE050,BTECH,CSE,CSE-4A,2,4,2023,aarav.sharma@attendedge.edu,+919876543210\n' +
+      'Ananya Reddy,23CSE051,BTECH,CSE,CSE-4A,2,4,2023,ananya.reddy@attendedge.edu,+919876543211\n';
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -379,10 +375,10 @@ export const AdminStudents: React.FC = () => {
       ),
     },
     {
-      header: 'Batch',
+      header: 'Admission Year',
       render: (row) => (
         <span className="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-          {row.batch?.name || '—'}
+          {row.admissionYear || '—'}
         </span>
       ),
     },
@@ -549,12 +545,6 @@ export const AdminStudents: React.FC = () => {
                   setDeptFilter('');
                 }
               }
-              if (newCourse && batchFilter) {
-                const b = batches.find((item) => item._id === batchFilter);
-                if (b && (b.course?._id || b.course) !== newCourse) {
-                  setBatchFilter('');
-                }
-              }
             }}
             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
           >
@@ -570,22 +560,15 @@ export const AdminStudents: React.FC = () => {
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
             <Calendar className="w-3.5 h-3.5 text-blue-600" />
-            <span>Filter by Batch</span>
+            <span>Admission Year</span>
           </label>
-          <select
-            value={batchFilter}
-            onChange={(e) => setBatchFilter(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium"
-          >
-            <option value="">All Batches</option>
-            {batches
-              .filter((b) => !courseFilter || (b.course?._id || b.course) === courseFilter)
-              .map((b) => (
-                <option key={b._id} value={b._id}>
-                  {b.name} ({b.course?.code || ''})
-                </option>
-              ))}
-          </select>
+          <input
+            type="number"
+            placeholder="e.g. 2024"
+            value={admissionYearFilter}
+            onChange={(e) => setAdmissionYearFilter(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-blue-500 font-medium font-mono"
+          />
         </div>
 
         <div>
@@ -656,7 +639,7 @@ export const AdminStudents: React.FC = () => {
         searchFilter={(row, q) =>
           row.name.toLowerCase().includes(q) ||
           row.rollNumber.toLowerCase().includes(q) ||
-          (row.batch?.name?.toLowerCase().includes(q) ?? false) ||
+          (row.admissionYear ? String(row.admissionYear).includes(q) : false) ||
           (row.email?.toLowerCase().includes(q) ?? false) ||
           (row.phone?.toLowerCase().includes(q) ?? false)
         }
@@ -667,7 +650,7 @@ export const AdminStudents: React.FC = () => {
         isOpen={isStudentModalOpen}
         onClose={() => setIsStudentModalOpen(false)}
         title={editingStudent ? 'Edit Student Details' : 'Enroll New Student'}
-        subtitle="Specify student information, batch cohort, and section allocation"
+        subtitle="Specify student information, course program, admission year, and section allocation"
       >
         <form onSubmit={handleSubmitStudent} className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -711,10 +694,6 @@ export const AdminStudents: React.FC = () => {
                 onChange={(e) => {
                   const newCourseId = e.target.value;
                   setModalCourse(newCourseId);
-                  const batchesForCourse = batches.filter(
-                    (b) => (b.course?._id || b.course) === newCourseId && b.isActive
-                  );
-                  setBatch(batchesForCourse[0]?._id || '');
                   const firstMatchingDept = departments.find(
                     (d) => (d.course?._id || d.course) === newCourseId
                   );
@@ -740,23 +719,18 @@ export const AdminStudents: React.FC = () => {
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                 <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                <span>Batch (Cohort)</span>
+                <span>Admission Year *</span>
               </label>
-              <select
-                value={batch}
-                disabled={!modalCourse}
-                onChange={(e) => setBatch(e.target.value)}
-                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 disabled:opacity-60 disabled:cursor-not-allowed"
-              >
-                <option value="">{modalCourse ? 'Select Batch (Optional)' : 'Select Course First'}</option>
-                {batches
-                  .filter((b) => (b.course?._id || b.course) === modalCourse)
-                  .map((b) => (
-                    <option key={b._id} value={b._id}>
-                      {b.name} ({b.startYear} - {b.endYear})
-                    </option>
-                  ))}
-              </select>
+              <input
+                type="number"
+                min="2000"
+                max="2100"
+                value={admissionYear}
+                onChange={(e) => setAdmissionYear(Number(e.target.value))}
+                placeholder="2024"
+                required
+                className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10 font-mono"
+              />
             </div>
           </div>
 
@@ -1114,7 +1088,7 @@ export const AdminStudents: React.FC = () => {
                               <span>•</span>
                               <span>Sec: {st.section?.name || '—'}</span>
                               <span>•</span>
-                              <span>Batch: {st.batch?.name || '—'}</span>
+                              <span>Admission: {st.admissionYear || '—'}</span>
                               {st.email && (
                                 <>
                                   <span>•</span>

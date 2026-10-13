@@ -11,7 +11,7 @@ const Department = require('../models/Department');
 const Setting = require('../models/Setting');
 const PeriodTemplate = require('../models/PeriodTemplate');
 const AcademicSession = require('../models/AcademicSession');
-const Batch = require('../models/Batch');
+const Course = require('../models/Course');
 const { calculateAttendancePercentage } = require('../utils/helpers');
 const { calculateDefaulters } = require('../utils/defaulterAggregation');
 const { generatePdf } = require('../utils/pdf');
@@ -26,61 +26,67 @@ function validateIndianPhone(phone) {
   return INDIAN_PHONE_REGEX.test(phone.trim());
 }
 
-// Helper to ensure HOD has managed Batch(es) assigned and retrieve associated Course departments and sections
+// Helper to resolve HOD scope strictly based on Course, Year, Session, and Department
 const getHodScope = async (req) => {
   const user = req.user;
   if (!user) {
     throw new Error('Authentication required');
   }
 
-  // Strictly extract batches assigned to this HOD
-  let rawBatches = user.assignedBatches || user.batches || user.batch || [];
-  if (!Array.isArray(rawBatches)) {
-    rawBatches = [rawBatches];
+  const courseId = user.course?._id ? user.course._id.toString() : (user.course ? user.course.toString() : null);
+  const year = user.year ? Number(user.year) : 1;
+  const sessionId = user.session?._id ? user.session._id.toString() : (user.session ? user.session.toString() : null);
+
+  let courseDepartments = [];
+  let courseDeptIds = [];
+  let courseIds = [];
+  let courseDoc = null;
+
+  if (courseId) {
+    courseDoc = await Course.findById(courseId);
+    courseIds = [courseId];
+    courseDepartments = await Department.find({ course: courseId })
+      .populate('course', 'name code durationYears')
+      .sort({ name: 1 });
+    courseDeptIds = courseDepartments.map((d) => d._id);
+  } else if (user.department) {
+    const deptDoc = await Department.findById(user.department).populate('course');
+    if (deptDoc?.course) {
+      courseDoc = deptDoc.course;
+      const cId = deptDoc.course._id.toString();
+      courseIds = [cId];
+      courseDepartments = await Department.find({ course: deptDoc.course._id })
+        .populate('course', 'name code durationYears')
+        .sort({ name: 1 });
+      courseDeptIds = courseDepartments.map((d) => d._id);
+    }
   }
 
-  const batchIds = rawBatches
-    .map((b) => (b && typeof b === 'object' && b._id ? b._id.toString() : b ? b.toString() : ''))
-    .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
-    .map((id) => new mongoose.Types.ObjectId(id));
-
-  // If HOD has no assigned batches, return an empty scope that blocks access to any data
-  if (batchIds.length === 0) {
-    return {
-      batchIds: [],
-      authorizedBatchIds: [],
-      courseIds: [],
-      allCourseIds: [],
-      courseDepartments: [],
-      courseDeptIds: [],
-      sectionIds: [],
-      year: user.year || 1,
-    };
+  // Find sections matching HOD's course, year, and session (if applicable)
+  const secQuery = {
+    department: { $in: courseDeptIds },
+    year,
+  };
+  if (sessionId) {
+    secQuery.session = sessionId;
   }
 
-  const managedBatches = await Batch.find({ _id: { $in: batchIds } }).populate('course');
-  const authorizedBatchIds = managedBatches.map((b) => b._id);
-  const courseIds = Array.from(
-    new Set(managedBatches.map((b) => (b.course?._id || b.course)?.toString()).filter(Boolean))
-  );
-
-  const courseDepartments = await Department.find({ course: { $in: courseIds } })
-    .populate('course', 'name code durationYears')
-    .sort({ name: 1 });
-  const courseDeptIds = courseDepartments.map((d) => d._id);
-
-  const sections = await Section.find({ batch: { $in: authorizedBatchIds } }).select('_id department batch semester year');
+  const sections = await Section.find(secQuery)
+    .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
+    .populate('session', 'year semesterLabel isActive');
   const sectionIds = sections.map((s) => s._id);
 
   return {
-    batchIds: authorizedBatchIds,
-    authorizedBatchIds,
+    courseId: courseIds[0] || null,
+    courseDoc,
     courseIds,
     allCourseIds: courseIds,
     courseDepartments,
     courseDeptIds,
+    sections,
     sectionIds,
-    year: user.year || 1,
+    year,
+    sessionId,
   };
 };
 
@@ -97,23 +103,18 @@ const resolveDeptFilter = (deptQuery, courseDeptIds) => {
   return { $in: [] };
 };
 
-// GET /api/hod/teacher-directory (Teacher list filtered to HOD's course/batches)
+// GET /api/hod/teacher-directory (Teacher list filtered to HOD's course departments)
 const getTeacherDirectory = async (req, res) => {
   try {
-    const { courseDeptIds, batchIds } = await getHodScope(req);
+    const { courseDeptIds } = await getHodScope(req);
     const teachers = await User.find({
       role: { $in: ['teacher', 'hod'] },
       isActive: true,
-      $or: [
-        { department: { $in: courseDeptIds } },
-        { assignedBatches: { $in: batchIds } },
-        { batches: { $in: batchIds } },
-      ],
+      department: { $in: courseDeptIds },
     })
       .populate({ path: 'department', populate: { path: 'course', select: 'name code' } })
-      .populate('assignedBatches', 'name startYear endYear course isActive')
-      .populate('batches', 'name startYear endYear course isActive')
-      .select('name email employeeId phone department role year course assignedBatches batches')
+      .populate('session', 'year semesterLabel isActive')
+      .select('name email employeeId phone department role year course session')
       .sort({ name: 1 });
 
     return res.status(200).json(teachers);
@@ -123,10 +124,10 @@ const getTeacherDirectory = async (req, res) => {
   }
 };
 
-// GET /api/hod/teachers (Faculty mapped to HOD's batches, sections, or departments)
+// GET /api/hod/teachers (Faculty mapped to HOD's sections or departments)
 const getDepartmentTeachers = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds, sectionIds } = await getHodScope(req);
+    const { courseDeptIds, sectionIds } = await getHodScope(req);
     const { department } = req.query;
 
     const assignedTeacherIds = await TeacherSubject.find({ section: { $in: sectionIds } }).distinct('teacher');
@@ -141,15 +142,12 @@ const getDepartmentTeachers = async (req, res) => {
       role: 'teacher',
       $or: [
         { _id: { $in: allTeacherIds } },
-        { assignedBatches: { $in: batchIds } },
-        { batches: { $in: batchIds } },
         { department: targetDept },
       ],
       isActive: true,
     })
       .populate({ path: 'department', populate: { path: 'course', select: 'name code' } })
-      .populate('assignedBatches', 'name startYear endYear course isActive')
-      .populate('batches', 'name startYear endYear course isActive')
+      .populate('session', 'year semesterLabel isActive')
       .select('-passwordHash')
       .sort({ name: 1 });
 
@@ -163,8 +161,8 @@ const getDepartmentTeachers = async (req, res) => {
 // POST /api/hod/staff or /api/hod/teachers (Create Teacher strictly scoped to HOD's course & department)
 const createStaff = async (req, res) => {
   try {
-    const { year, courseId, courseDeptIds } = await getHodScope(req);
-    const { name, email, password, department, employeeId, phone, assignedBatches } = req.body;
+    const { year, courseId, courseDeptIds, sessionId } = await getHodScope(req);
+    const { name, email, password, department, employeeId, phone } = req.body;
 
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Name, email, and password are required.' });
@@ -190,16 +188,6 @@ const createStaff = async (req, res) => {
       return res.status(400).json({ message: 'Invalid phone number. Must be a valid 10-digit Indian mobile number (+91XXXXXXXXXX) starting with 6-9.' });
     }
 
-    // Validate assignedBatches against HOD course
-    let batchIds = [];
-    if (Array.isArray(assignedBatches)) {
-      const validBatches = await Batch.find({
-        _id: { $in: assignedBatches.filter((b) => mongoose.Types.ObjectId.isValid(b)) },
-        course: courseId,
-      });
-      batchIds = validBatches.map((b) => b._id);
-    }
-
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
@@ -209,10 +197,10 @@ const createStaff = async (req, res) => {
       passwordHash,
       role: 'teacher',
       department: targetDeptId,
-      course: null,
+      course: courseId,
       year: null,
+      session: sessionId || null,
       teachingYears: [year],
-      assignedBatches: batchIds,
       employeeId: employeeId ? employeeId.trim() : '',
       phone: phone ? phone.trim() : '',
       isActive: true,
@@ -220,16 +208,9 @@ const createStaff = async (req, res) => {
 
     await teacher.save();
 
-    if (batchIds.length > 0) {
-      await Batch.updateMany(
-        { _id: { $in: batchIds } },
-        { $addToSet: { assignedTeachers: teacher._id } }
-      );
-    }
-
     const populated = await User.findById(teacher._id)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('assignedBatches', 'name startYear endYear course isActive')
+      .populate('session', 'year semesterLabel isActive')
       .select('-passwordHash');
 
     return res.status(201).json(populated);
@@ -242,9 +223,9 @@ const createStaff = async (req, res) => {
 // PATCH /api/hod/staff/:id or /api/hod/teachers/:id (Update Teacher strictly scoped to HOD's course)
 const updateStaff = async (req, res) => {
   try {
-    const { year, courseId, courseDeptIds } = await getHodScope(req);
+    const { year, courseDeptIds } = await getHodScope(req);
     const { id } = req.params;
-    const { name, email, password, department, employeeId, phone, isActive, assignedBatches } = req.body;
+    const { name, email, password, department, employeeId, phone, isActive } = req.body;
 
     const teacher = await User.findById(id);
     if (!teacher) {
@@ -285,29 +266,6 @@ const updateStaff = async (req, res) => {
       teacher.passwordHash = await bcrypt.hash(password, salt);
     }
 
-    if (assignedBatches !== undefined) {
-      let batchIds = [];
-      if (Array.isArray(assignedBatches)) {
-        const validBatches = await Batch.find({
-          _id: { $in: assignedBatches.filter((b) => mongoose.Types.ObjectId.isValid(b)) },
-          course: courseId,
-        });
-        batchIds = validBatches.map((b) => b._id);
-      }
-      teacher.assignedBatches = batchIds;
-
-      await Batch.updateMany(
-        { assignedTeachers: id, course: courseId, _id: { $nin: batchIds } },
-        { $pull: { assignedTeachers: id } }
-      );
-      if (batchIds.length > 0) {
-        await Batch.updateMany(
-          { _id: { $in: batchIds } },
-          { $addToSet: { assignedTeachers: id } }
-        );
-      }
-    }
-
     // Ensure HOD's year is preserved in teachingYears
     const currentYears = Array.isArray(teacher.teachingYears) ? teacher.teachingYears : [];
     if (!currentYears.includes(year)) {
@@ -318,7 +276,7 @@ const updateStaff = async (req, res) => {
 
     const populated = await User.findById(id)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('assignedBatches', 'name startYear endYear course isActive')
+      .populate('session', 'year semesterLabel isActive')
       .select('-passwordHash');
 
     return res.status(200).json(populated);
@@ -331,7 +289,7 @@ const updateStaff = async (req, res) => {
 // DELETE /api/hod/staff/:id or /api/hod/teachers/:id
 const deleteStaff = async (req, res) => {
   try {
-    const { year, courseDeptIds } = await getHodScope(req);
+    const { courseDeptIds } = await getHodScope(req);
     const { id } = req.params;
 
     const teacher = await User.findById(id);
@@ -366,7 +324,6 @@ const deleteStaff = async (req, res) => {
     }
 
     await User.findByIdAndDelete(id);
-    await Batch.updateMany({ assignedTeachers: id }, { $pull: { assignedTeachers: id } });
 
     return res.status(200).json({ message: `Teacher '${teacher.name}' deleted successfully.` });
   } catch (error) {
@@ -386,43 +343,18 @@ const getDepartments = async (req, res) => {
   }
 };
 
-// GET /api/hod/batches (Batches managed by this HOD)
-const getBatches = async (req, res) => {
-  try {
-    const { batchIds } = await getHodScope(req);
-    const filter = {
-      _id: { $in: batchIds },
-    };
-    if (req.query.isActive !== undefined && req.query.isActive !== 'all') {
-      filter.isActive = req.query.isActive === 'true';
-    }
-    const batches = await Batch.find(filter)
-      .populate('course', 'name code durationYears')
-      .populate('assignedTeachers', 'name email')
-      .sort({ startYear: -1, name: 1 });
-    return res.status(200).json(batches);
-  } catch (error) {
-    console.error('getBatches error:', error);
-    return res.status(500).json({ message: error.message || 'Error fetching batches' });
-  }
-};
-
-// GET /api/hod/subjects (Subjects strictly scoped to HOD's assigned batches)
+// GET /api/hod/subjects (Subjects strictly scoped to HOD's course and year)
 const getDepartmentSubjects = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds } = await getHodScope(req);
-    const { department, semester, isActive, includeArchived, batch } = req.query;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { department, semester, isActive, includeArchived } = req.query;
 
     const subFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
 
     if (semester && semester !== 'all') subFilter.semester = Number(semester);
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      subFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     if (includeArchived === 'true' || isActive === 'all') {
       // no isActive filter
@@ -436,7 +368,6 @@ const getDepartmentSubjects = async (req, res) => {
 
     const subjects = await Subject.find(subFilter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code' } })
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ semester: 1, code: 1 });
 
     return res.status(200).json(subjects);
@@ -446,11 +377,11 @@ const getDepartmentSubjects = async (req, res) => {
   }
 };
 
-// POST /api/hod/subjects (Create Subject strictly scoped to HOD's assigned batch & department)
+// POST /api/hod/subjects (Create Subject strictly scoped to HOD's course & year)
 const createSubject = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds, year } = await getHodScope(req);
-    const { name, code, department, semester, credits, teacher, batch } = req.body;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { name, code, department, semester, credits, teacher } = req.body;
 
     if (!name || !code || !semester) {
       return res.status(400).json({ message: 'Subject Name, Code, and Semester Level are required.' });
@@ -472,17 +403,6 @@ const createSubject = async (req, res) => {
       return res.status(409).json({ message: `Subject code '${cleanCode}' already exists in this department.` });
     }
 
-    let batchId = null;
-    if (batch && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      if (isAllowed) {
-        batchId = batch;
-      }
-    }
-    if (!batchId && batchIds.length > 0) {
-      batchId = batchIds[0];
-    }
-
     const subject = new Subject({
       name: name.trim(),
       code: cleanCode,
@@ -490,7 +410,6 @@ const createSubject = async (req, res) => {
       semester: Number(semester),
       year,
       credits: credits ? Number(credits) : 3,
-      batch: batchId,
       isActive: true,
     });
 
@@ -506,7 +425,7 @@ const createSubject = async (req, res) => {
         const activeSession = await AcademicSession.findOne({ isActive: true });
         const matchingSections = await Section.find({
           department: assignedDept,
-          batch: batchId,
+          year,
           semester: Number(semester),
         });
 
@@ -534,8 +453,7 @@ const createSubject = async (req, res) => {
     }
 
     const populated = await Subject.findById(subject._id)
-      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('batch', 'name startYear endYear isActive');
+      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } });
 
     const result = populated.toObject();
     result.assignedSectionsCount = assignedSectionsCount;
@@ -550,12 +468,12 @@ const createSubject = async (req, res) => {
   }
 };
 
-// PATCH /api/hod/subjects/:id (Update Subject strictly scoped to HOD's batches & course)
+// PATCH /api/hod/subjects/:id (Update Subject strictly scoped to HOD's course)
 const updateSubject = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds } = await getHodScope(req);
+    const { courseDeptIds, year } = await getHodScope(req);
     const { id } = req.params;
-    const { name, code, department, semester, credits, teacher, batch, isActive } = req.body;
+    const { name, code, department, semester, credits, teacher, isActive } = req.body;
 
     const subject = await Subject.findById(id);
     if (!subject) {
@@ -580,18 +498,6 @@ const updateSubject = async (req, res) => {
     if (semester !== undefined) subject.semester = Number(semester);
     if (credits !== undefined) subject.credits = Number(credits);
     if (isActive !== undefined) subject.isActive = isActive;
-    if (batch !== undefined) {
-      if (batch && mongoose.Types.ObjectId.isValid(batch)) {
-        const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-        if (isAllowed) {
-          subject.batch = batch;
-        } else {
-          return res.status(403).json({ message: 'Selected batch is outside your assigned managed batches.' });
-        }
-      } else {
-        subject.batch = null;
-      }
-    }
 
     await subject.save();
 
@@ -605,7 +511,7 @@ const updateSubject = async (req, res) => {
         const activeSession = await AcademicSession.findOne({ isActive: true });
         const matchingSections = await Section.find({
           department: subject.department,
-          batch: subject.batch || { $in: batchIds },
+          year,
           semester: subject.semester,
         });
 
@@ -633,8 +539,7 @@ const updateSubject = async (req, res) => {
     }
 
     const populated = await Subject.findById(subject._id)
-      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('batch', 'name startYear endYear isActive');
+      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } });
 
     const result = populated.toObject();
     result.assignedSectionsCount = assignedSectionsCount;
@@ -670,8 +575,7 @@ const archiveSubject = async (req, res) => {
     await subject.save();
 
     const populated = await Subject.findById(subject._id)
-      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('batch', 'name startYear endYear isActive');
+      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } });
 
     return res.status(200).json({
       message: `Subject '${subject.name}' (${subject.code}) has been archived successfully.`,
@@ -704,8 +608,7 @@ const restoreSubject = async (req, res) => {
     await subject.save();
 
     const populated = await Subject.findById(subject._id)
-      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } })
-      .populate('batch', 'name startYear endYear isActive');
+      .populate({ path: 'department', populate: { path: 'course', select: 'name code durationYears' } });
 
     return res.status(200).json({
       message: `Subject '${subject.name}' (${subject.code}) has been restored successfully.`,
@@ -824,7 +727,7 @@ const forceDeleteSubject = async (req, res) => {
 // DELETE /api/hod/teacher-subjects/:id (Delete TeacherSubject Assignment scoped to HOD)
 const deleteTeacherSubjectAssignment = async (req, res) => {
   try {
-    const { batchIds, sectionIds } = await getHodScope(req);
+    const { sectionIds } = await getHodScope(req);
     const { id } = req.params;
 
     const assignment = await TeacherSubject.findById(id).populate('section');
@@ -832,10 +735,9 @@ const deleteTeacherSubjectAssignment = async (req, res) => {
       return res.status(404).json({ message: 'Subject assignment not found.' });
     }
 
-    const isAuthorized = sectionIds.some((sId) => sId.toString() === assignment.section?._id?.toString()) ||
-      (assignment.section?.batch && batchIds.some((bId) => bId.toString() === assignment.section.batch.toString()));
+    const isAuthorized = sectionIds.some((sId) => sId.toString() === assignment.section?._id?.toString());
     if (!isAuthorized) {
-      return res.status(403).json({ message: 'Access denied. Assignment does not belong to your managed Batches.' });
+      return res.status(403).json({ message: 'Access denied. Assignment does not belong to your managed sections.' });
     }
 
     await TeacherSubject.findByIdAndDelete(id);
@@ -849,7 +751,7 @@ const deleteTeacherSubjectAssignment = async (req, res) => {
 // PATCH /api/hod/teacher-subjects/:id (Update TeacherSubject Assignment scoped to HOD)
 const updateTeacherSubjectAssignment = async (req, res) => {
   try {
-    const { batchIds, sectionIds, courseDeptIds } = await getHodScope(req);
+    const { sectionIds } = await getHodScope(req);
     const { id } = req.params;
     const { teacher, subject, section, session } = req.body;
 
@@ -858,10 +760,9 @@ const updateTeacherSubjectAssignment = async (req, res) => {
       return res.status(404).json({ message: 'Subject assignment not found.' });
     }
 
-    const isAuthorized = sectionIds.some((sId) => sId.toString() === assignment.section?._id?.toString()) ||
-      (assignment.section?.batch && batchIds.some((bId) => bId.toString() === assignment.section.batch.toString()));
+    const isAuthorized = sectionIds.some((sId) => sId.toString() === assignment.section?._id?.toString());
     if (!isAuthorized) {
-      return res.status(403).json({ message: 'Access denied. Assignment does not belong to your managed Batches.' });
+      return res.status(403).json({ message: 'Access denied. Assignment does not belong to your managed sections.' });
     }
 
     if (teacher) {
@@ -885,10 +786,9 @@ const updateTeacherSubjectAssignment = async (req, res) => {
       if (!validSection) {
         return res.status(400).json({ message: 'Selected section not found.' });
       }
-      const isSecAuthorized = sectionIds.some((sId) => sId.toString() === validSection._id.toString()) ||
-        (validSection.batch && batchIds.some((bId) => bId.toString() === validSection.batch.toString()));
+      const isSecAuthorized = sectionIds.some((sId) => sId.toString() === validSection._id.toString());
       if (!isSecAuthorized) {
-        return res.status(403).json({ message: 'Selected section is outside your managed Batches.' });
+        return res.status(403).json({ message: 'Selected section is outside your managed sections.' });
       }
       assignment.section = section;
     }
@@ -907,19 +807,13 @@ const updateTeacherSubjectAssignment = async (req, res) => {
       })
       .populate({
         path: 'subject',
-        select: 'name code semester credits department batch',
-        populate: [
-          { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
-        ],
+        select: 'name code semester credits department',
+        populate: { path: 'department', select: 'name code' },
       })
       .populate({
         path: 'section',
-        select: 'name semester year department batch',
-        populate: [
-          { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
-        ],
+        select: 'name semester year department',
+        populate: { path: 'department', select: 'name code' },
       })
       .populate('session', 'year semesterLabel isActive');
 
@@ -930,26 +824,21 @@ const updateTeacherSubjectAssignment = async (req, res) => {
   }
 };
 
-// GET /api/hod/sections (All sections in HOD managed batches)
+// GET /api/hod/sections (All sections in HOD managed scope)
 const getDepartmentSections = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds } = await getHodScope(req);
-    const { department, session, batch } = req.query;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { department, session } = req.query;
 
     const filter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
     if (session) filter.session = session;
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      filter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const sections = await Section.find(filter)
       .populate({ path: 'department', populate: { path: 'course', select: 'name code' } })
       .populate('session', 'year semesterLabel isActive')
-      .populate('batch', 'name startYear endYear isActive')
       .sort({ department: 1, semester: 1, name: 1 });
 
     return res.status(200).json(sections);
@@ -959,20 +848,16 @@ const getDepartmentSections = async (req, res) => {
   }
 };
 
-// GET /api/hod/teacher-subjects (Teacher assignments for sections in HOD managed batches)
+// GET /api/hod/teacher-subjects (Teacher assignments for sections in HOD managed scope)
 const getTeacherSubjectAssignments = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds } = await getHodScope(req);
-    const { department, batch } = req.query;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { department } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const sections = await Section.find(secFilter).select('_id');
     const sectionIds = sections.map((s) => s._id);
@@ -985,19 +870,13 @@ const getTeacherSubjectAssignments = async (req, res) => {
       })
       .populate({
         path: 'subject',
-        select: 'name code semester credits department batch',
-        populate: [
-          { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
-        ],
+        select: 'name code semester credits department',
+        populate: { path: 'department', select: 'name code' },
       })
       .populate({
         path: 'section',
-        select: 'name semester year department batch',
-        populate: [
-          { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
-        ],
+        select: 'name semester year department',
+        populate: { path: 'department', select: 'name code' },
       })
       .populate('session', 'year semesterLabel isActive');
 
@@ -1008,17 +887,16 @@ const getTeacherSubjectAssignments = async (req, res) => {
   }
 };
 
-// POST /api/hod/teacher-subjects (Validate section.batch in HOD managed batches)
+// POST /api/hod/teacher-subjects (Create assignment strictly scoped to HOD's sections)
 const createTeacherSubjectAssignment = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds, sectionIds } = await getHodScope(req);
+    const { sectionIds } = await getHodScope(req);
     const { teacher, subject, section, session } = req.body;
 
     if (!teacher || !subject || !section || !session) {
       return res.status(400).json({ message: 'Teacher, Subject, Section, and Academic Session are required.' });
     }
 
-    // Verify teacher exists system-wide (cross-department teacher directory)
     const validTeacher = await User.findOne({ _id: teacher, role: { $in: ['teacher', 'hod'] }, isActive: true });
     if (!validTeacher) {
       return res.status(400).json({ message: 'Selected teacher was not found or is inactive.' });
@@ -1029,11 +907,10 @@ const createTeacherSubjectAssignment = async (req, res) => {
       return res.status(404).json({ message: 'Selected section not found.' });
     }
 
-    const isSecAuthorized = sectionIds.some((sId) => sId.toString() === validSection._id.toString()) ||
-      (validSection.batch && batchIds.some((bId) => bId.toString() === validSection.batch.toString()));
+    const isSecAuthorized = sectionIds.some((sId) => sId.toString() === validSection._id.toString());
     if (!isSecAuthorized) {
       return res.status(403).json({
-        message: `Access denied. Section '${validSection.name}' is outside your assigned Batches.`,
+        message: `Access denied. Section '${validSection.name}' is outside your managed sections.`,
       });
     }
 
@@ -1076,20 +953,16 @@ const createTeacherSubjectAssignment = async (req, res) => {
   }
 };
 
-// GET /api/hod/reports/department (Aggregates across all sections for HOD's batches)
+// GET /api/hod/reports/department (Aggregates across all sections for HOD's scope)
 const getDepartmentReports = async (req, res) => {
   try {
-    const { batchIds, courseDepartments, courseDeptIds, year } = await getHodScope(req);
-    const { department, batch } = req.query;
+    const { courseDepartments, courseDeptIds, year } = await getHodScope(req);
+    const { department } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const [managedSections, settings] = await Promise.all([
       Section.find(secFilter).populate('department', 'name code'),
@@ -1097,11 +970,7 @@ const getDepartmentReports = async (req, res) => {
     ]);
 
     const sectionIds = managedSections.map((s) => s._id);
-
     const studentFilter = { section: { $in: sectionIds }, isActive: true };
-    if (secFilter.batch) {
-      studentFilter.batch = secFilter.batch;
-    }
 
     const [attendances, students, periodSlots, teacherAssignments] = await Promise.all([
       Attendance.find({ section: { $in: sectionIds } })
@@ -1112,7 +981,7 @@ const getDepartmentReports = async (req, res) => {
           populate: { path: 'department', select: 'name code' },
         })
         .sort({ date: 1 }),
-      Student.find(studentFilter).populate('department', 'name code').populate('batch', 'name startYear endYear'),
+      Student.find(studentFilter).populate('department', 'name code').populate('course', 'name code'),
       PeriodSlot.find({ section: { $in: sectionIds } }),
       TeacherSubject.find({ section: { $in: sectionIds } }).distinct('teacher'),
     ]);
@@ -1129,13 +998,6 @@ const getDepartmentReports = async (req, res) => {
       trendMap.set(key, { date: key, present: 0, absent: 0, late: 0, percentage: 0 });
     }
 
-    const now = new Date();
-    const dayOfWeek = now.getDay();
-    const startOfWeek = new Date(now);
-    startOfWeek.setDate(now.getDate() - dayOfWeek);
-    startOfWeek.setHours(0, 0, 0, 0);
-
-    // Per-Department Breakdown aggregation - strictly for HOD's own course departments
     const deptBreakdownMap = new Map();
     courseDepartments.forEach((d) => {
       deptBreakdownMap.set(d._id.toString(), {
@@ -1236,24 +1098,20 @@ const getDepartmentReports = async (req, res) => {
   }
 };
 
-// GET /api/hod/reports/low-attendance (Students with attendance below threshold in HOD managed batches)
+// GET /api/hod/reports/low-attendance (Students with attendance below threshold in HOD managed scope)
 const getLowAttendanceStudents = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds, year } = await getHodScope(req);
-    const { department, batch } = req.query;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { department } = req.query;
     const settings = await Setting.findOne();
     const threshold = settings?.attendanceThresholdPercent || Number(process.env.ATTENDANCE_THRESHOLD_PERCENT || 75);
 
     const targetDept = resolveDeptFilter(department, courseDeptIds);
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: targetDept,
+      year,
     };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const managedSections = await Section.find(secFilter).select('_id');
     const sectionIds = managedSections.map((s) => s._id);
@@ -1263,14 +1121,11 @@ const getLowAttendanceStudents = async (req, res) => {
       department: targetDept,
       isActive: true,
     };
-    if (secFilter.batch) {
-      studentFilter.batch = secFilter.batch;
-    }
 
     const students = await Student.find(studentFilter)
-      .populate('section', 'name semester year batch')
+      .populate('section', 'name semester year')
       .populate('department', 'name code')
-      .populate('batch', 'name startYear endYear');
+      .populate('course', 'name code');
 
     const attendances = await Attendance.find({ section: { $in: sectionIds } })
       .populate('subject', 'name code');
@@ -1324,7 +1179,7 @@ const getLowAttendanceStudents = async (req, res) => {
           departmentName: item.student.department?.name,
           departmentCode: item.student.department?.code,
           section: item.student.section?.name,
-          batchName: item.student.batch?.name || '—',
+          admissionYear: item.student.admissionYear || '—',
           year: item.student.year || year,
           semester: item.student.semester,
           email: item.student.email,
@@ -1357,21 +1212,17 @@ const getLowAttendanceStudents = async (req, res) => {
   }
 };
 
-// GET /api/hod/attendance (Attendance records for sections in HOD managed batches)
+// GET /api/hod/attendance (Attendance records for sections in HOD managed scope)
 const getDepartmentAttendanceLogs = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds } = await getHodScope(req);
-    const { department, section, subject, teacher, startDate, endDate, batch } = req.query;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { department, section, subject, teacher, startDate, endDate } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
     if (section) secFilter._id = section;
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const managedSections = await Section.find(secFilter).select('_id');
     const sectionIds = managedSections.map((s) => s._id);
@@ -1387,18 +1238,12 @@ const getDepartmentAttendanceLogs = async (req, res) => {
 
     const attendances = await Attendance.find(filter)
       .populate('teacher', 'name email employeeId')
-      .populate('subject', 'name code semester batch')
+      .populate('subject', 'name code semester')
       .populate({
         path: 'section',
-        populate: [
-          { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name startYear endYear isActive' },
-        ],
+        populate: { path: 'department', select: 'name code' },
       })
-      .populate({
-        path: 'periodSlot',
-        populate: { path: 'batch', select: 'name startYear endYear isActive' },
-      })
+      .populate('periodSlot')
       .populate('records.student', 'name rollNumber')
       .sort({ date: -1, markedAt: -1 })
       .limit(200);
@@ -1410,11 +1255,11 @@ const getDepartmentAttendanceLogs = async (req, res) => {
   }
 };
 
-// GET /api/hod/defaulters (Defaulter analysis scoped to HOD managed batches)
+// GET /api/hod/defaulters (Defaulter analysis scoped to HOD managed scope)
 const getHodDefaulters = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds, year } = await getHodScope(req);
-    const { month, startDate, endDate, department, subject, mode, batch, batchId } = req.query;
+    const { courseId, courseDeptIds, year } = await getHodScope(req);
+    const { month, startDate, endDate, department, subject, mode } = req.query;
 
     let scopedDeptId = null;
     let scopedDeptIds = courseDeptIds;
@@ -1425,18 +1270,7 @@ const getHodDefaulters = async (req, res) => {
         scopedDeptIds = null;
       } else {
         scopedDeptId = null;
-        scopedDeptIds = []; // Disallow foreign department
-      }
-    }
-
-    let resolvedBatchId = null;
-    let resolvedBatchIds = batchIds;
-    const reqBatch = batchId || batch;
-    if (reqBatch && reqBatch !== 'all' && mongoose.Types.ObjectId.isValid(reqBatch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === reqBatch.toString());
-      if (isAllowed) {
-        resolvedBatchId = reqBatch;
-        resolvedBatchIds = null;
+        scopedDeptIds = [];
       }
     }
 
@@ -1444,12 +1278,11 @@ const getHodDefaulters = async (req, res) => {
       month,
       startDate,
       endDate,
+      courseId,
       departmentId: scopedDeptId,
       departmentIds: scopedDeptIds,
       year,
       subjectId: subject || null,
-      batchId: resolvedBatchId,
-      batchIds: resolvedBatchIds,
       mode: mode || (subject ? 'subject' : 'overall'),
     });
 
@@ -1463,12 +1296,12 @@ const getHodDefaulters = async (req, res) => {
 // GET /api/hod/teachers/export-pdf
 const exportHodTeachersPdf = async (req, res) => {
   try {
-    const { batchIds, courseDepartments, courseDeptIds, year } = await getHodScope(req);
+    const { courseDepartments, courseDeptIds, year } = await getHodScope(req);
     const { department } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
 
     const sections = await Section.find(secFilter).select('_id');
@@ -1539,17 +1372,13 @@ const exportHodTeachersPdf = async (req, res) => {
 // GET /api/hod/teacher-subjects/export
 const exportHodTeacherSubjectsCsv = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds, year } = await getHodScope(req);
-    const { department, batch } = req.query;
+    const { courseDeptIds, year } = await getHodScope(req);
+    const { department } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const yearSections = await Section.find(secFilter).select('_id');
     const sectionIds = yearSections.map((s) => s._id);
@@ -1559,11 +1388,8 @@ const exportHodTeacherSubjectsCsv = async (req, res) => {
       .populate({ path: 'subject', select: 'name code semester credits department' })
       .populate({
         path: 'section',
-        select: 'name semester year department batch',
-        populate: [
-          { path: 'department', select: 'name code' },
-          { path: 'batch', select: 'name' },
-        ],
+        select: 'name semester year department',
+        populate: { path: 'department', select: 'name code' },
       })
       .populate('session', 'year semesterLabel');
 
@@ -1573,7 +1399,6 @@ const exportHodTeacherSubjectsCsv = async (req, res) => {
       subjectName: a.subject?.name || '',
       sectionName: a.section?.name || '',
       year: a.section?.year || year,
-      batchName: a.section?.batch?.name || '',
       sessionLabel: a.session?.semesterLabel || '',
       teacherName: a.teacher?.name || '',
       teacherEmployeeId: a.teacher?.employeeId || '',
@@ -1586,7 +1411,6 @@ const exportHodTeacherSubjectsCsv = async (req, res) => {
       'subjectName',
       'sectionName',
       'year',
-      'batchName',
       'sessionLabel',
       'teacherName',
       'teacherEmployeeId',
@@ -1605,17 +1429,13 @@ const exportHodTeacherSubjectsCsv = async (req, res) => {
 // GET /api/hod/teacher-subjects/export-pdf
 const exportHodTeacherSubjectsPdf = async (req, res) => {
   try {
-    const { batchIds, courseDepartments, courseDeptIds, year } = await getHodScope(req);
-    const { department, batch } = req.query;
+    const { courseDepartments, courseDeptIds, year } = await getHodScope(req);
+    const { department } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const yearSections = await Section.find(secFilter).select('_id');
     const sectionIds = yearSections.map((s) => s._id);
@@ -1630,11 +1450,8 @@ const exportHodTeacherSubjectsPdf = async (req, res) => {
         .populate({ path: 'subject', select: 'name code semester credits' })
         .populate({
           path: 'section',
-          select: 'name semester year department batch',
-          populate: [
-            { path: 'department', select: 'name code' },
-            { path: 'batch', select: 'name' },
-          ],
+          select: 'name semester year department',
+          populate: { path: 'department', select: 'name code' },
         })
         .populate('session', 'year semesterLabel'),
       Setting.findOne(),
@@ -1648,14 +1465,13 @@ const exportHodTeacherSubjectsPdf = async (req, res) => {
       subject: a.subject ? `${a.subject.name} (${a.subject.code})` : '—',
       section: a.section?.name || '—',
       department: a.section?.department?.code || '—',
-      batch: a.section?.batch?.name ? `${a.section.batch.name} Batch` : '—',
       session: a.session ? `${a.session.year} · ${a.session.semesterLabel}` : '—',
     }));
 
     const courseDoc = courseDepartments[0]?.course;
     const html = buildGenericTablePdfHtml({
       title: `Faculty Subject Allocations · Year ${year}`,
-      subtitle: `Instructor allocations for ${courseDoc?.code || ''} Year ${year} sections with batch cohorts & academic sessions`,
+      subtitle: `Instructor allocations for ${courseDoc?.code || ''} Year ${year} sections and academic sessions`,
       institutionName,
       filters: {
         Course: courseDoc?.code || '—',
@@ -1669,11 +1485,6 @@ const exportHodTeacherSubjectsPdf = async (req, res) => {
         },
         { header: 'Subject (Code)', key: 'subject' },
         { header: 'Dept / Section', render: (r) => `${r.department} · ${r.section}`, align: 'center' },
-        {
-          header: 'Batch Cohort',
-          render: (r) => `<span class="badge badge-indigo font-bold">${r.batch}</span>`,
-          align: 'center',
-        },
         { header: 'Academic Session', key: 'session' },
       ],
       rows,
@@ -1695,15 +1506,15 @@ const importHodTeacherSubjectsCsv = async (req, res) => {
     if (!req.file || !req.file.buffer) {
       return res.status(400).json({ message: 'CSV file is required.' });
     }
-    const { batchIds, courseDeptIds, sectionIds } = await getHodScope(req);
+    const { courseDeptIds, year } = await getHodScope(req);
     const rows = parseCsv(req.file.buffer);
     let created = 0, updated = 0, skipped = 0;
     const errors = [];
 
     const [departments, sections, subjects, teachers, sessions] = await Promise.all([
       Department.find({ _id: { $in: courseDeptIds } }).populate('course'),
-      Section.find({ batch: { $in: batchIds } }).populate({ path: 'department', populate: { path: 'course' } }).populate('session'),
-      Subject.find({ batch: { $in: batchIds } }),
+      Section.find({ department: { $in: courseDeptIds }, year }).populate({ path: 'department', populate: { path: 'course' } }).populate('session'),
+      Subject.find({ department: { $in: courseDeptIds }, year }),
       User.find({ role: { $in: ['teacher', 'hod'] }, isActive: true }),
       AcademicSession.find(),
     ]);
@@ -1753,7 +1564,7 @@ const importHodTeacherSubjectsCsv = async (req, res) => {
       if (!secDoc) {
         errors.push({
           row: lineNum,
-          reason: `Section '${secName}' not found in department '${deptCode}' within your managed batches.`,
+          reason: `Section '${secName}' not found in department '${deptCode}' for Year ${year}.`,
         });
         skipped++;
         continue;
@@ -1767,7 +1578,7 @@ const importHodTeacherSubjectsCsv = async (req, res) => {
       if (!subDoc) {
         errors.push({
           row: lineNum,
-          reason: `Subject code '${subCode}' not found in department '${deptCode}'.`,
+          reason: `Subject code '${subCode}' not found in department '${deptCode}' for Year ${year}.`,
         });
         skipped++;
         continue;
@@ -1828,7 +1639,7 @@ const importHodTeacherSubjectsCsv = async (req, res) => {
 // GET /api/hod/timetable/export-timetable-pdf
 const exportHodTimetablePdf = async (req, res) => {
   try {
-    const { batchIds, courseDeptIds } = await getHodScope(req);
+    const { courseDeptIds, year } = await getHodScope(req);
     const section = req.query.section || req.query.sectionId;
     if (!section) {
       return res.status(400).json({ message: 'Section ID query parameter is required.' });
@@ -1837,8 +1648,7 @@ const exportHodTimetablePdf = async (req, res) => {
     const [sectionDoc, settings] = await Promise.all([
       Section.findById(section)
         .populate({ path: 'department', populate: { path: 'course' } })
-        .populate('session')
-        .populate('batch'),
+        .populate('session'),
       Setting.findOne(),
     ]);
 
@@ -1849,10 +1659,11 @@ const exportHodTimetablePdf = async (req, res) => {
     }
 
     // Scoping check
-    const isBatchAllowed = sectionDoc.batch && batchIds.some((bId) => bId.toString() === sectionDoc.batch._id?.toString() || bId.toString() === sectionDoc.batch.toString());
-    if (!isBatchAllowed) {
+    const secDeptId = sectionDoc.department?._id?.toString() || sectionDoc.department?.toString();
+    const isDeptAllowed = courseDeptIds.some((dId) => dId.toString() === secDeptId);
+    if (!isDeptAllowed || Number(sectionDoc.year) !== year) {
       return res.status(403).json({
-        message: `Access denied: Section '${sectionDoc.name}' is outside your managed Batches.`,
+        message: `Access denied: Section '${sectionDoc.name}' is outside your assigned course and year.`,
       });
     }
 
@@ -1862,8 +1673,7 @@ const exportHodTimetablePdf = async (req, res) => {
     // 2. Fetch scheduled period slots for this section
     const slots = await PeriodSlot.find({ section })
       .populate('subject', 'name code')
-      .populate('teacher', 'name email employeeId')
-      .populate('batch', 'name');
+      .populate('teacher', 'name email employeeId');
 
     // 3. Dynamic Period Determination: Iterate over ONLY active period templates / configured periods
     let periods = [];
@@ -1916,8 +1726,8 @@ const exportHodTimetablePdf = async (req, res) => {
 // GET /api/hod/defaulters/export-pdf
 const exportHodDefaultersPdf = async (req, res) => {
   try {
-    const { batchIds, courseDepartments, courseDeptIds, year } = await getHodScope(req);
-    let { month, startDate, endDate, department, subject, mode, batch, batchId } = req.query;
+    const { courseId, courseDepartments, courseDeptIds, year } = await getHodScope(req);
+    let { month, startDate, endDate, department, subject, mode } = req.query;
 
     const settings = await Setting.findOne();
     const institutionName = settings?.institutionName || settings?.collegeName || 'Everest College';
@@ -1940,42 +1750,23 @@ const exportHodDefaultersPdf = async (req, res) => {
       }
     }
 
-    let resolvedBatchId = null;
-    let resolvedBatchIds = batchIds;
-    const reqBatch = batchId || batch;
-    if (reqBatch && reqBatch !== 'all' && mongoose.Types.ObjectId.isValid(reqBatch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === reqBatch.toString());
-      if (isAllowed) {
-        resolvedBatchId = reqBatch;
-        resolvedBatchIds = null;
-      }
-    }
-
     const data = await calculateDefaulters({
       month,
       startDate,
       endDate,
+      courseId,
       departmentId: scopedDeptId,
       departmentIds: scopedDeptIds,
       year,
       subjectId: subject || null,
-      batchId: resolvedBatchId,
-      batchIds: resolvedBatchIds,
       mode: mode || (subject ? 'subject' : 'overall'),
       threshold,
     });
-
-    let batchLabel = '';
-    if (batch || batchId) {
-      const bDoc = await Batch.findById(batchId || batch);
-      if (bDoc) batchLabel = bDoc.name;
-    }
 
     const rows = (data.defaulters || []).map((d) => ({
       rollNumber: d.rollNumber || 'N/A',
       name: d.name || 'N/A',
       dept: d.departmentName || d.department || d.departmentCode || 'N/A',
-      batch: d.batchName || batchLabel || '—',
       section: d.section || d.sectionName || 'N/A',
       attended: `${d.present != null ? d.present : (d.attended != null ? d.attended : 'N/A')} / ${d.totalPeriods != null ? d.totalPeriods : 'N/A'}`,
       percentage: `${d.percentage != null && !isNaN(d.percentage) ? d.percentage : 'N/A'}%`,
@@ -1991,7 +1782,6 @@ const exportHodDefaultersPdf = async (req, res) => {
       institutionName,
       filters: {
         Course: courseDoc?.code || '—',
-        ...(batchLabel ? { Batch: batchLabel } : {}),
         Period: periodLabel,
         Mode: data.mode === 'subject' ? 'Subject-wise' : 'Overall',
         Threshold: `${data.thresholdPercent || threshold}%`,
@@ -2000,7 +1790,6 @@ const exportHodDefaultersPdf = async (req, res) => {
         { header: 'Roll No', key: 'rollNumber', align: 'center' },
         { header: 'Student Name', key: 'name' },
         { header: 'Department', key: 'dept', align: 'center' },
-        { header: 'Cohort Batch', key: 'batch', align: 'center' },
         { header: 'Section', key: 'section', align: 'center' },
         { header: 'Attended / Total', key: 'attended', align: 'center' },
         {
@@ -2025,31 +1814,18 @@ const exportHodDefaultersPdf = async (req, res) => {
 // GET /api/hod/reports/export-pdf
 const exportHodReportsPdf = async (req, res) => {
   try {
-    const { batchIds, courseDepartments, courseDeptIds, year } = await getHodScope(req);
-    const { department, batch } = req.query;
+    const { courseDepartments, courseDeptIds, year } = await getHodScope(req);
+    const { department } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const yearSections = await Section.find(secFilter).populate('department', 'name code');
     const sectionIds = yearSections.map((s) => s._id);
 
     const studentFilter = { section: { $in: sectionIds }, isActive: true };
-    if (secFilter.batch) {
-      studentFilter.batch = secFilter.batch;
-    }
-
-    let batchLabel = '';
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const bDoc = await Batch.findById(batch);
-      if (bDoc) batchLabel = bDoc.name;
-    }
 
     const [attendances, students, settings] = await Promise.all([
       Attendance.find({ section: { $in: sectionIds } }).populate({ path: 'section', populate: { path: 'department' } }),
@@ -2119,7 +1895,6 @@ const exportHodReportsPdf = async (req, res) => {
       filters: {
         Course: courseDoc?.code || '—',
         'Academic Year': `Year ${year}`,
-        ...(batchLabel ? { Batch: batchLabel } : {}),
         'Total Sections': yearSections.length,
         'Active Students': students.length,
       },
@@ -2149,18 +1924,14 @@ const exportHodReportsPdf = async (req, res) => {
 // GET /api/hod/attendance/export-pdf
 const exportHodAttendancePdf = async (req, res) => {
   try {
-    const { batchIds, courseDepartments, courseDeptIds, year } = await getHodScope(req);
-    const { department, section, subject, teacher, startDate, endDate, batch } = req.query;
+    const { courseDepartments, courseDeptIds, year } = await getHodScope(req);
+    const { department, section, subject, teacher, startDate, endDate } = req.query;
 
     const secFilter = {
-      batch: { $in: batchIds },
       department: resolveDeptFilter(department, courseDeptIds),
+      year,
     };
     if (section) secFilter._id = section;
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const isAllowed = batchIds.some((bId) => bId.toString() === batch.toString());
-      secFilter.batch = isAllowed ? batch : { $in: [] };
-    }
 
     const yearSections = await Section.find(secFilter).select('_id');
     const sectionIds = yearSections.map((s) => s._id);
@@ -2174,27 +1945,15 @@ const exportHodAttendancePdf = async (req, res) => {
       if (endDate) filter.date.$lte = new Date(endDate);
     }
 
-    let batchLabel = '';
-    if (batch && batch !== 'all' && mongoose.Types.ObjectId.isValid(batch)) {
-      const bDoc = await Batch.findById(batch);
-      if (bDoc) batchLabel = bDoc.name;
-    }
-
     const [attendances, settings] = await Promise.all([
       Attendance.find(filter)
         .populate('teacher', 'name email employeeId')
         .populate('subject', 'name code')
         .populate({
           path: 'section',
-          populate: [
-            { path: 'department', select: 'name code' },
-            { path: 'batch', select: 'name startYear endYear isActive' },
-          ],
+          populate: { path: 'department', select: 'name code' },
         })
-        .populate({
-          path: 'periodSlot',
-          populate: { path: 'batch', select: 'name startYear endYear isActive' },
-        })
+        .populate('periodSlot')
         .sort({ date: -1, markedAt: -1 })
         .limit(200),
       Setting.findOne(),
@@ -2208,14 +1967,12 @@ const exportHodAttendancePdf = async (req, res) => {
       const a = att.records.filter((r) => r.status === 'absent').length;
       const total = att.records.length;
       const pct = total > 0 ? calculateAttendancePercentage(p, l, a) : 0;
-      const bName = att.section?.batch?.name || att.periodSlot?.batch?.name || batchLabel || '—';
 
       return {
         date: new Date(att.date).toLocaleDateString('en-IN', { dateStyle: 'medium' }),
         subject: att.subject ? `${att.subject.name} (${att.subject.code})` : '—',
         section: att.section?.name || '—',
         dept: att.section?.department?.code || '—',
-        batch: bName,
         teacher: att.teacher?.name || '—',
         counts: `${p}P / ${l}L / ${a}A (Total ${total})`,
         percentage: `${pct}%`,
@@ -2231,13 +1988,11 @@ const exportHodAttendancePdf = async (req, res) => {
         Course: courseDoc?.code || '—',
         'Academic Year': `Year ${year}`,
         Department: department && department !== 'all' ? department : 'All Course Departments',
-        ...(batchLabel ? { Batch: batchLabel } : {}),
       },
       columns: [
         { header: 'Lecture Date', key: 'date', align: 'center' },
         { header: 'Subject (Code)', key: 'subject' },
         { header: 'Dept / Section', render: (r) => `${r.dept} · ${r.section}`, align: 'center' },
-        { header: 'Cohort Batch', key: 'batch', align: 'center' },
         { header: 'Faculty Instructor', key: 'teacher' },
         { header: 'Breakdown (P/L/A)', key: 'counts', align: 'center' },
         {
@@ -2262,7 +2017,6 @@ const exportHodAttendancePdf = async (req, res) => {
 module.exports = {
   getTeacherDirectory,
   getDepartments,
-  getBatches,
   getDepartmentTeachers,
   createStaff,
   updateStaff,
@@ -2292,4 +2046,3 @@ module.exports = {
   exportHodReportsPdf,
   exportHodAttendancePdf,
 };
-

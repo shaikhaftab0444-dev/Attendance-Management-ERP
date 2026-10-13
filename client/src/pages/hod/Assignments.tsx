@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Plus, BookOpen, User, Layers, Building2, Trash2, Edit2 } from 'lucide-react';
 import api from '../../lib/api';
-import { TeacherSubjectAssignment, User as UserType, Subject, Section, Department, Batch } from '../../types';
+import { TeacherSubjectAssignment, User as UserType, Subject, Section, Department } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { Modal } from '../../components/ui/Modal';
 import { ImportExportBar } from '../../components/ui/ImportExportBar';
@@ -15,10 +15,8 @@ export const HodAssignments: React.FC = () => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [sections, setSections] = useState<Section[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [deptFilter, setDeptFilter] = useState<string>('all');
   const [semFilter, setSemFilter] = useState<string>('all');
-  const [batchFilter, setBatchFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState(true);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -43,22 +41,19 @@ export const HodAssignments: React.FC = () => {
       const params: any = {};
       if (deptFilter !== 'all') params.department = deptFilter;
       if (semFilter !== 'all') params.semester = semFilter;
-      if (batchFilter !== 'all') params.batch = batchFilter;
 
-      const [asgnRes, tchRes, subRes, secRes, deptRes, batchRes] = await Promise.all([
+      const [asgnRes, tchRes, subRes, secRes, deptRes] = await Promise.all([
         api.get('/hod/teacher-subjects', { params }),
         api.get('/hod/teacher-directory'), // Cross-department faculty directory
         api.get('/hod/subjects', { params }),
         api.get('/hod/sections', { params: deptFilter !== 'all' ? { department: deptFilter } : {} }),
         api.get('/hod/departments'),
-        api.get('/hod/batches'),
       ]);
       setAssignments(asgnRes.data);
       setTeachers(tchRes.data);
       setSubjects(subRes.data);
       setSections(secRes.data);
       setDepartments(deptRes.data);
-      setBatches(batchRes.data);
 
       if (!editingAssignment) {
         if (tchRes.data[0]) setTeacher(tchRes.data[0]._id);
@@ -78,7 +73,7 @@ export const HodAssignments: React.FC = () => {
 
   useEffect(() => {
     fetchData();
-  }, [deptFilter, semFilter, batchFilter]);
+  }, [deptFilter, semFilter]);
 
   const openCreateModal = () => {
     setEditingAssignment(null);
@@ -194,24 +189,12 @@ export const HodAssignments: React.FC = () => {
       },
     },
     {
-      header: 'Academic Session & Batch',
-      render: (row) => {
-        const batchName = row.section?.batch?.name || row.subject?.batch?.name || (typeof row.section?.batch === 'string' ? row.section.batch : '');
-        return (
-          <div className="flex flex-col gap-1">
-            {batchName ? (
-              <span className="inline-flex items-center gap-1 font-bold text-[11px] px-2 py-0.5 rounded-md bg-indigo-50 border border-indigo-200 text-indigo-700 w-fit">
-                {batchName} Batch
-              </span>
-            ) : (
-              <span className="text-[10px] text-slate-400 italic">Universal</span>
-            )}
-            <span className="text-xs text-slate-500 font-medium">
-              {row.session?.year} · {row.session?.semesterLabel}
-            </span>
-          </div>
-        );
-      },
+      header: 'Academic Session',
+      render: (row) => (
+        <span className="text-xs text-slate-700 font-medium">
+          {row.session?.year} · {row.session?.semesterLabel}
+        </span>
+      ),
     },
     {
       header: 'Actions',
@@ -275,7 +258,6 @@ export const HodAssignments: React.FC = () => {
             queryParams={{
               department: deptFilter !== 'all' ? deptFilter : undefined,
               semester: semFilter !== 'all' ? semFilter : undefined,
-              batch: batchFilter !== 'all' ? batchFilter : undefined,
             }}
           />
 
@@ -289,8 +271,8 @@ export const HodAssignments: React.FC = () => {
         </div>
       </div>
 
-      {/* 3 Independent Filter Dropdowns: Department, Semester, Batch */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+      {/* 2 Filter Dropdowns: Department, Semester */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
         {/* Department Filter */}
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -330,26 +312,6 @@ export const HodAssignments: React.FC = () => {
             ))}
           </select>
         </div>
-
-        {/* Batch Filter */}
-        <div>
-          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <Layers className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Filter by Batch Cohort</span>
-          </label>
-          <select
-            value={batchFilter}
-            onChange={(e) => setBatchFilter(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:outline-none focus:border-indigo-500"
-          >
-            <option value="all">All Batch Cohorts</option>
-            {batches.map((b) => (
-              <option key={b._id} value={b._id}>
-                {b.name} ({b.startYear}-{b.endYear})
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
       <DataTable
@@ -361,8 +323,7 @@ export const HodAssignments: React.FC = () => {
           (row.teacher?.name?.toLowerCase().includes(q) ?? false) ||
           (row.subject?.name?.toLowerCase().includes(q) ?? false) ||
           (row.section?.name?.toLowerCase().includes(q) ?? false) ||
-          (row.section?.department?.code?.toLowerCase().includes(q) ?? false) ||
-          ((row.section?.batch as any)?.name?.toLowerCase().includes(q) ?? false)
+          (row.section?.department?.code?.toLowerCase().includes(q) ?? false)
         }
       />
 
@@ -441,10 +402,9 @@ export const HodAssignments: React.FC = () => {
             >
               {sections.map((sec) => {
                 const dept = (sec.department as any)?.code || (sec.department as any)?.name || 'Dept';
-                const batch = (sec.batch as any)?.name ? `· ${(sec.batch as any).name}` : '';
                 return (
                   <option key={sec._id} value={sec._id}>
-                    {sec.name} ({dept} {batch} · Sem {sec.semester})
+                    {sec.name} ({dept} · Sem {sec.semester})
                   </option>
                 );
               })}

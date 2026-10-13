@@ -48,7 +48,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, isMobile = fa
         { label: 'Dashboard', icon: LayoutDashboard, path: '/admin/dashboard' },
         { label: 'Courses', icon: School, path: '/admin/courses' },
         { label: 'Departments', icon: Building2, path: '/admin/departments' },
-        { label: 'Batches', icon: Calendar, path: '/admin/batches' },
         { label: 'Academic Sessions', icon: CalendarRange, path: '/admin/sessions' },
         { label: 'Staff Directory', icon: Users, path: '/admin/users' },
         { label: 'Students Roster', icon: GraduationCap, path: '/admin/students' },

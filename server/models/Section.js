@@ -28,10 +28,6 @@ const sectionSchema = new mongoose.Schema({
     ref: 'AcademicSession',
     required: true,
   },
-  batch: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Batch',
-  },
 }, {
   timestamps: true,
 });

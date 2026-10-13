@@ -31,12 +31,9 @@ async function calculateDefaulters({
   departmentIds,
   year,
   sectionId,
-  batchId,
-  batch,
   mode = 'subject',
   threshold,
 }) {
-  const targetBatchId = batchId || batch || null;
   let startDate;
   let endDate;
   let rangeLabel = '';
@@ -80,7 +77,7 @@ async function calculateDefaulters({
     threshold = setting?.attendanceThresholdPercent ?? setting?.attendanceThreshold ?? Number(process.env.ATTENDANCE_THRESHOLD_PERCENT || 75);
   }
 
-  // Determine section filter if department or course or year or sectionId or batch specified
+  // Determine section filter if department or course or year or sectionId specified
   const sectionQuery = {};
   if (departmentId) {
     sectionQuery.department = departmentId;
@@ -94,14 +91,9 @@ async function calculateDefaulters({
 
   if (year) sectionQuery.year = Number(year);
   if (sectionId) sectionQuery._id = sectionId;
-  if (targetBatchId) {
-    sectionQuery.batch = targetBatchId;
-  } else if (Array.isArray(batchIds) && batchIds.length > 0) {
-    sectionQuery.batch = { $in: batchIds };
-  }
 
   let sectionIds = null;
-  if (departmentId || departmentIds || courseId || year || sectionId || targetBatchId || (Array.isArray(batchIds) && batchIds.length > 0)) {
+  if (departmentId || departmentIds || courseId || year || sectionId) {
     const sections = await Section.find(sectionQuery).select('_id');
     sectionIds = sections.map((s) => s._id);
   }
@@ -124,22 +116,16 @@ async function calculateDefaulters({
     .populate('subject', 'name code')
     .populate({
       path: 'section',
-      select: 'name year semester department batch',
-      populate: [
-        {
-          path: 'department',
-          select: 'name code course',
-          populate: { path: 'course', select: 'name code durationYears' },
-        },
-        {
-          path: 'batch',
-          select: 'name startYear endYear',
-        },
-      ],
+      select: 'name year semester department',
+      populate: {
+        path: 'department',
+        select: 'name code course',
+        populate: { path: 'course', select: 'name code durationYears' },
+      },
     })
     .populate({
       path: 'records.student',
-      select: 'name rollNumber section department year batch isActive condonedPeriods condonationReason condonedBy condonedAt',
+      select: 'name rollNumber section department year course admissionYear isActive condonedPeriods condonationReason condonedBy condonedAt',
       populate: [
         {
           path: 'department',
@@ -147,8 +133,8 @@ async function calculateDefaulters({
           populate: { path: 'course', select: 'name code durationYears' },
         },
         {
-          path: 'batch',
-          select: 'name startYear endYear',
+          path: 'course',
+          select: 'name code durationYears',
         },
       ],
     });
@@ -165,21 +151,14 @@ async function calculateDefaulters({
     const sec = att.section;
     if (!sub || !sec) return;
 
-    // Verify department / year / batch if populated
+    // Verify department / year if populated
     const secDeptId = sec.department?._id?.toString() || sec.department?.toString();
     if (departmentId && secDeptId && secDeptId !== departmentId.toString()) return;
     if (year && sec.year && Number(sec.year) !== Number(year)) return;
 
-    const secBatchId = sec.batch?._id?.toString() || sec.batch?.toString();
-
     att.records.forEach((rec) => {
       const student = rec.student;
       if (!student || student.isActive === false) return;
-
-      const studBatchId = student.batch?._id?.toString() || student.batch?.toString();
-      if (targetBatchId && secBatchId !== targetBatchId.toString() && studBatchId !== targetBatchId.toString()) {
-        return;
-      }
 
       const sId = student._id ? student._id.toString() : student.toString();
       const subId = sub._id ? sub._id.toString() : sub.toString();
@@ -187,14 +166,13 @@ async function calculateDefaulters({
       const key = isOverall ? sId : `${sId}_${subId}`;
 
       const deptDoc = (sec.department && typeof sec.department === 'object') ? sec.department : (student.department && typeof student.department === 'object' ? student.department : null);
-      const courseDoc = deptDoc?.course && typeof deptDoc.course === 'object' ? deptDoc.course : null;
-      const batchDoc = (student.batch && typeof student.batch === 'object') ? student.batch : (sec.batch && typeof sec.batch === 'object' ? sec.batch : null);
+      const courseDoc = (student.course && typeof student.course === 'object') ? student.course : (deptDoc?.course && typeof deptDoc.course === 'object' ? deptDoc.course : null);
       const deptName = deptDoc?.name || '—';
       const deptCode = deptDoc?.code || '';
       const courseName = courseDoc?.name || '';
       const courseCode = courseDoc?.code || '';
       const courseDept = courseCode && deptCode ? `${courseCode} · ${deptCode}` : deptCode || deptName;
-      const batchName = batchDoc?.name || '—';
+      const admissionYear = student.admissionYear ? String(student.admissionYear) : '—';
 
       if (!studentMap[key]) {
         studentMap[key] = {
@@ -207,7 +185,7 @@ async function calculateDefaulters({
           courseName,
           courseCode,
           courseDept,
-          batchName,
+          admissionYear,
           section: sec.name || '—',
           sectionName: sec.name || '—',
           sectionYear: sec.year || student.year || 1,
@@ -253,7 +231,7 @@ async function calculateDefaulters({
         courseName: item.courseName,
         courseCode: item.courseCode,
         courseDept: item.courseDept,
-        batchName: item.batchName,
+        admissionYear: item.admissionYear,
         section: item.section,
         sectionName: item.sectionName,
         year: item.sectionYear,
@@ -297,7 +275,6 @@ async function calculateDefaulters({
     threshold,
     thresholdPercent: threshold,
     mode: isOverall ? 'overall' : 'subject',
-    batch: targetBatchId,
     defaulters,
     stats: {
       totalDefaulters,

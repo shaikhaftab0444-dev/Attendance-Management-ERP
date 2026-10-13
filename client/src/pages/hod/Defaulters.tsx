@@ -10,7 +10,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import api from '../../lib/api';
-import { Subject, DefaulterRecord, DefaulterResponse, Department, Batch } from '../../types';
+import { Subject, DefaulterRecord, DefaulterResponse, Department } from '../../types';
 import { DataTable, Column } from '../../components/ui/DataTable';
 import { StatCard } from '../../components/ui/StatCard';
 import { Modal } from '../../components/ui/Modal';
@@ -35,13 +35,11 @@ export const HodDefaulters: React.FC = () => {
   const [startDate, setStartDate] = useState<string>(initialDates.start);
   const [endDate, setEndDate] = useState<string>(initialDates.end);
   const [deptFilter, setDeptFilter] = useState<string>('all');
-  const [batch, setBatch] = useState<string>('');
   const [subject, setSubject] = useState<string>('');
   const [mode, setMode] = useState<'subject' | 'overall'>('overall');
 
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
-  const [batches, setBatches] = useState<Batch[]>([]);
   const [data, setData] = useState<DefaulterResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -60,14 +58,12 @@ export const HodDefaulters: React.FC = () => {
 
   const fetchDropdownData = async () => {
     try {
-      const [subRes, deptRes, batchRes] = await Promise.all([
+      const [subRes, deptRes] = await Promise.all([
         api.get('/hod/subjects'),
         api.get('/hod/departments'),
-        api.get('/hod/batches'),
       ]);
       setSubjects(subRes.data);
       setDepartments(deptRes.data);
-      setBatches(batchRes.data);
     } catch (err: any) {
       console.error('Error fetching dropdown data:', err);
     }
@@ -78,7 +74,6 @@ export const HodDefaulters: React.FC = () => {
       setIsLoading(true);
       const params: any = { startDate, endDate, mode };
       if (deptFilter !== 'all') params.department = deptFilter;
-      if (batch) params.batch = batch;
       if (subject) params.subject = subject;
 
       const res = await api.get('/hod/defaulters', { params });
@@ -96,7 +91,7 @@ export const HodDefaulters: React.FC = () => {
 
   useEffect(() => {
     fetchDefaulters();
-  }, [startDate, endDate, deptFilter, batch, subject, mode]);
+  }, [startDate, endDate, deptFilter, subject, mode]);
 
   const handleExportCsv = () => {
     if (!data || data.defaulters.length === 0) {
@@ -257,7 +252,6 @@ export const HodDefaulters: React.FC = () => {
               endDate,
               mode,
               ...(deptFilter !== 'all' ? { department: deptFilter } : {}),
-              ...(batch ? { batch } : {}),
               ...(subject ? { subject } : {}),
             }}
           />
@@ -265,7 +259,7 @@ export const HodDefaulters: React.FC = () => {
       </div>
 
       {/* Filter Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 p-4 bg-white rounded-2xl border border-slate-200/80 shadow-sm">
         {/* Start Date */}
         <div>
           <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
@@ -294,26 +288,6 @@ export const HodDefaulters: React.FC = () => {
             required
             className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-mono font-medium"
           />
-        </div>
-
-        {/* Cohort Batch Filter */}
-        <div>
-          <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-            <Calendar className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Cohort Batch</span>
-          </label>
-          <select
-            value={batch}
-            onChange={(e) => setBatch(e.target.value)}
-            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:border-purple-500 font-medium"
-          >
-            <option value="">All Batches</option>
-            {batches.map((b) => (
-              <option key={b._id} value={b._id}>
-                {b.name} {!b.isActive ? '(Archived)' : ''}
-              </option>
-            ))}
-          </select>
         </div>
 
         {/* Department Filter */}

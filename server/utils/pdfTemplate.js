@@ -355,8 +355,6 @@ function buildTimetablePdfHtml({
           .join('')
       : `<tr><td colspan="7" class="empty-slot" style="padding: 24px; text-align: center; color: #94a3b8; font-style: italic;">No timetable periods configured for this section.</td></tr>`;
 
-  const batchName = section?.batch?.name || (typeof section?.batch === 'string' ? section.batch : '');
-
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -559,7 +557,6 @@ function buildTimetablePdfHtml({
     <div class="section-pills">
       ${course?.code ? `<span class="pill pill-blue">${escapeHtml(course.code)}</span>` : ''}
       ${department?.name ? `<span class="pill pill-purple">${escapeHtml(department.name)} (${escapeHtml(department.code || '')})</span>` : ''}
-      ${batchName ? `<span class="pill pill-purple">${escapeHtml(batchName)} Batch</span>` : ''}
       ${section?.year ? `<span class="pill pill-emerald">Year ${escapeHtml(section.year)}</span>` : ''}
       ${section?.semester ? `<span class="pill pill-blue">Sem ${escapeHtml(section.semester)}</span>` : ''}
     </div>

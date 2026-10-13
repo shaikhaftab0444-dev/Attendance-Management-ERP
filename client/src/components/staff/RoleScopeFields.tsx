@@ -1,23 +1,23 @@
 import React from 'react';
-import { School, Building2, GraduationCap, ShieldCheck } from 'lucide-react';
-import { Course, Department, User, UserRole, Batch } from '../../types';
+import { Calendar, School, Building2, GraduationCap, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Course, Department, User, UserRole, AcademicSession } from '../../types';
 
 export interface RoleScopeFieldsProps {
   role: UserRole;
   courses: Course[];
   departments: Department[];
+  sessions?: AcademicSession[];
   users: User[];
-  batches?: Batch[];
   courseId: string;
   setCourseId: (courseId: string) => void;
   departmentId: string;
   setDepartmentId: (deptId: string) => void;
   year: number;
   setYear: (year: number) => void;
+  sessionId?: string;
+  setSessionId?: (sessionId: string) => void;
   teachingYears?: number[];
   setTeachingYears?: (years: number[]) => void;
-  assignedBatches?: string[];
-  setAssignedBatches?: (batches: string[]) => void;
   editingUserId?: string;
   disabled?: boolean;
 }
@@ -26,18 +26,18 @@ export const RoleScopeFields: React.FC<RoleScopeFieldsProps> = ({
   role,
   courses,
   departments,
+  sessions = [],
   users,
-  batches = [],
   courseId,
   setCourseId,
   departmentId,
   setDepartmentId,
   year,
   setYear,
+  sessionId = '',
+  setSessionId,
   teachingYears = [1],
   setTeachingYears,
-  assignedBatches = [],
-  setAssignedBatches,
   editingUserId,
   disabled = false,
 }) => {
@@ -46,17 +46,6 @@ export const RoleScopeFields: React.FC<RoleScopeFieldsProps> = ({
     const suffix = y === 1 ? 'st' : y === 2 ? 'nd' : y === 3 ? 'rd' : 'th';
     return `${y}${suffix} Year`;
   };
-
-  // Helper map to find which (courseId, year) combination has an active HOD
-  const hodCourseYearMap = new Map<string, User>();
-  users.forEach((u) => {
-    if (u.role === 'hod' && u.isActive && u.year) {
-      const cId = typeof u.course === 'object' && u.course ? u.course._id : (u.course as string);
-      if (cId) {
-        hodCourseYearMap.set(`${cId}_${u.year}`, u);
-      }
-    }
-  });
 
   const selectedCourseObj = courses.find((c) => c._id === courseId);
   const maxYearsForCourse = selectedCourseObj ? selectedCourseObj.durationYears : 4;
@@ -189,163 +178,116 @@ export const RoleScopeFields: React.FC<RoleScopeFieldsProps> = ({
             </p>
           )}
         </div>
-
-        {/* Assigned Batches Multi-Select */}
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-xs font-semibold text-blue-950 uppercase tracking-wider flex items-center gap-1.5">
-              <Building2 className="w-3.5 h-3.5 text-blue-600" />
-              <span>Assigned Cohort Batches</span>
-            </label>
-            <span className="text-[11px] text-slate-500 font-medium">
-              {assignedBatches.length === 0 ? (
-                <span className="text-slate-500">All Course Batches (Default)</span>
-              ) : (
-                `${assignedBatches.length} batch${assignedBatches.length > 1 ? 'es' : ''} mapped`
-              )}
-            </span>
-          </div>
-
-          {(() => {
-            const courseBatches = batches.filter(
-              (b) => (b.course?._id || b.course) === courseId
-            );
-
-            if (courseBatches.length === 0) {
-              return (
-                <p className="text-xs text-slate-500 italic p-2 bg-white rounded-lg border border-dashed border-blue-200">
-                  No cohort batches created for this course program yet.
-                </p>
-              );
-            }
-
-            const toggleBatch = (bId: string) => {
-              if (disabled || !setAssignedBatches) return;
-              if (assignedBatches.includes(bId)) {
-                setAssignedBatches(assignedBatches.filter((id) => id !== bId));
-              } else {
-                setAssignedBatches([...assignedBatches, bId]);
-              }
-            };
-
-            return (
-              <div className="flex items-center gap-2 flex-wrap">
-                {courseBatches.map((b) => {
-                  const isSelected = assignedBatches.includes(b._id);
-                  return (
-                    <button
-                      key={b._id}
-                      type="button"
-                      disabled={disabled}
-                      onClick={() => toggleBatch(b._id)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer select-none ${
-                        isSelected
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm shadow-indigo-500/20'
-                          : 'bg-white border-blue-200 text-slate-700 hover:bg-blue-50/60'
-                      } ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
-                    >
-                      <span
-                        className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] ${
-                          isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                        }`}
-                      >
-                        {isSelected ? '✓' : '+'}
-                      </span>
-                      <span>{b.name}</span>
-                      {!b.isActive && (
-                        <span className="text-[9px] px-1 py-0.2 rounded bg-slate-200 text-slate-700 font-normal">
-                          Archived
-                        </span>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-            );
-          })()}
-        </div>
       </div>
     );
   }
 
   if (role === 'hod') {
-    const toggleBatch = (bId: string) => {
-      if (disabled || !setAssignedBatches) return;
-      if (assignedBatches.includes(bId)) {
-        setAssignedBatches(assignedBatches.filter((id) => id !== bId));
-      } else {
-        setAssignedBatches([...assignedBatches, bId]);
-      }
-    };
+    // Conflict check
+    const conflictHod = users.find((u) => {
+      if (u.role !== 'hod' || !u.isActive || (editingUserId && u._id === editingUserId)) return false;
+      const uCourseId = typeof u.course === 'object' && u.course ? u.course._id : (u.course as string);
+      const uSessionId = typeof u.session === 'object' && u.session ? u.session._id : (u.session as string);
+      return uCourseId === courseId && uSessionId === sessionId && Number(u.year) === Number(year);
+    });
 
     return (
-      <div className="space-y-3 p-3.5 bg-purple-50/70 rounded-xl border border-purple-200/80">
-        <div className="flex items-center justify-between">
-          <label className="block text-xs font-semibold text-purple-950 uppercase tracking-wider flex items-center gap-1.5">
-            <School className="w-3.5 h-3.5 text-purple-700" />
-            <span>Select Managed Batches / Cohorts *</span>
-          </label>
-          <span className="text-[11px] text-purple-700 font-medium">
-            {assignedBatches.length === 0 ? (
-              <span className="text-rose-600 font-semibold">Select at least one managed batch</span>
-            ) : (
-              `${assignedBatches.length} batch${assignedBatches.length > 1 ? 'es' : ''} assigned`
-            )}
-          </span>
+      <div className="space-y-4 p-4 bg-purple-50/70 rounded-xl border border-purple-200/80">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {/* 1. Academic Session */}
+          <div>
+            <label className="block text-xs font-semibold text-purple-950 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-purple-700" />
+              <span>Academic Session *</span>
+            </label>
+            <select
+              value={sessionId}
+              disabled={disabled}
+              onChange={(e) => setSessionId?.(e.target.value)}
+              required
+              className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10 disabled:opacity-60"
+            >
+              <option value="">Select Session...</option>
+              {sessions.map((s) => (
+                <option key={s._id} value={s._id}>
+                  {s.year} ({s.semesterLabel}){s.isActive ? ' - Active' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 2. Course / Program */}
+          <div>
+            <label className="block text-xs font-semibold text-purple-950 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <School className="w-3.5 h-3.5 text-purple-700" />
+              <span>Course / Program *</span>
+            </label>
+            <select
+              value={courseId}
+              disabled={disabled}
+              onChange={(e) => {
+                const newCourseId = e.target.value;
+                setCourseId(newCourseId);
+                const nextDepts = departments.filter((d) => (d.course?._id || d.course) === newCourseId);
+                setDepartmentId(nextDepts[0]?._id || '');
+              }}
+              required
+              className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10 disabled:opacity-60"
+            >
+              <option value="">Select Course...</option>
+              {courses.map((c) => (
+                <option key={c._id} value={c._id}>
+                  {c.name} ({c.code})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 3. Academic Year */}
+          <div>
+            <label className="block text-xs font-semibold text-purple-950 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <GraduationCap className="w-3.5 h-3.5 text-purple-700" />
+              <span>Academic Year *</span>
+            </label>
+            <select
+              value={year}
+              disabled={disabled}
+              onChange={(e) => setYear(Number(e.target.value))}
+              required
+              className="w-full px-3 py-2 bg-white border border-purple-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10 disabled:opacity-60"
+            >
+              {courseYearsArray.map((yr) => (
+                <option key={yr} value={yr}>
+                  {formatYearLabel(yr)}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
-        {batches.length === 0 ? (
-          <p className="text-xs text-purple-800 italic p-2 bg-white rounded-lg border border-dashed border-purple-300">
-            No academic batches created yet. Please create batch cohorts first in the Batches tab.
-          </p>
-        ) : (
-          <div className="flex items-center gap-2 flex-wrap">
-            {batches.map((b) => {
-              const isSelected = assignedBatches.includes(b._id);
-              const crs = typeof b.course === 'object' && b.course ? b.course : null;
-              return (
-                <button
-                  key={b._id}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => toggleBatch(b._id)}
-                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer select-none ${
-                    isSelected
-                      ? 'bg-purple-600 border-purple-600 text-white shadow-sm shadow-purple-500/20'
-                      : 'bg-white border-purple-200 text-slate-700 hover:bg-purple-100/60'
-                  } ${disabled ? 'opacity-60 cursor-not-allowed' : ''}`}
-                >
-                  <span
-                    className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] ${
-                      isSelected ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
-                    }`}
-                  >
-                    {isSelected ? '✓' : '+'}
-                  </span>
-                  <span>{b.name}</span>
-                  {crs && (
-                    <span
-                      className={`text-[10px] px-1.5 py-0.5 rounded ${
-                        isSelected ? 'bg-purple-700 text-purple-100' : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {crs.code}
-                    </span>
-                  )}
-                  {!b.isActive && (
-                    <span className="text-[9px] px-1 py-0.2 rounded bg-slate-200 text-slate-700 font-normal">
-                      Archived
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+        {/* Informative Scope Card */}
+        {sessionId && courseId && (
+          <div className="p-3 bg-white/90 border border-purple-200 rounded-xl text-xs text-purple-900 flex items-center gap-2">
+            <span className="font-semibold text-purple-700">Assignment Scope:</span>
+            <span>
+              {formatYearLabel(year)} {courses.find((c) => c._id === courseId)?.name || 'Course'} HOD for Session{' '}
+              {sessions.find((s) => s._id === sessionId)?.year || '—'} (
+              {sessions.find((s) => s._id === sessionId)?.semesterLabel || '—'})
+            </span>
           </div>
         )}
-        {assignedBatches.length === 0 && (
-          <p className="text-[11px] text-rose-600 font-medium">
-            HODs require at least one assigned cohort batch to manage curriculum, allocations, and attendance logs.
-          </p>
+
+        {/* Existing Conflict Warning */}
+        {conflictHod && (
+          <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-semibold block">Notice: Existing Assignment</span>
+              <span>
+                {conflictHod.name} is already assigned as {formatYearLabel(year)} HOD for this Course & Session.
+              </span>
+            </div>
+          </div>
         )}
       </div>
     );
